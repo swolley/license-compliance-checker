@@ -187,6 +187,112 @@ function is_license_allowed(string $license_expression, array $allowed_patterns,
 }
 
 /**
+ * Guess an SPDX id from the head of a license text.
+ */
+function detect_license_from_text(string $text): ?string
+{
+    if (mb_stripos($text, 'GNU AFFERO') !== false || mb_stripos($text, 'AGPL') !== false) {
+        return 'AGPL-3.0-or-later';
+    } elseif (mb_stripos($text, 'GNU GENERAL') !== false || mb_stripos($text, 'GPL') !== false) {
+        return 'GPL-3.0-or-later';
+    } elseif (preg_match('/\bMIT\b/i', $text) === 1) {
+        return 'MIT';
+    } elseif (mb_stripos($text, 'BSD') !== false) {
+        if (mb_stripos($text, '2-Clause') !== false || mb_stripos($text, 'Simplified BSD') !== false) {
+            return 'BSD-2-Clause';
+        } elseif (mb_stripos($text, '4-Clause') !== false || mb_stripos($text, 'Original BSD') !== false) {
+            return 'BSD-4-Clause';
+        } else {
+            return 'BSD-3-Clause';
+        }
+    } elseif (mb_stripos($text, 'Apache') !== false) {
+        if (mb_stripos($text, 'Version 1.0') !== false) {
+            return 'Apache-1.0';
+        } elseif (mb_stripos($text, 'Version 1.1') !== false) {
+            return 'Apache-1.1';
+        } else {
+            return 'Apache-2.0';
+        }
+    } elseif (mb_stripos($text, 'all rights reserved') !== false) {
+        return 'proprietary';
+    } elseif (mb_stripos($text, 'Creative Commons') !== false || mb_stripos($text, 'CC0') !== false) {
+        if (mb_stripos($text, 'CC0') !== false || mb_stripos($text, 'Public Domain') !== false) {
+            return 'CC0-1.0';
+        } elseif (mb_stripos($text, 'BY-NC-SA') !== false || mb_stripos($text, 'Attribution-NonCommercial-ShareAlike') !== false) {
+            return 'CC-BY-NC-SA-4.0';
+        } elseif (mb_stripos($text, 'BY-NC ') !== false || (mb_stripos($text, 'Attribution-NonCommercial') !== false && mb_stripos($text, 'ShareAlike') === false)) {
+            return 'CC-BY-NC-4.0';
+        } elseif (mb_stripos($text, 'BY-SA') !== false || mb_stripos($text, 'Attribution-ShareAlike') !== false) {
+            return 'CC-BY-SA-4.0';
+        } elseif (mb_stripos($text, 'BY ') !== false || mb_stripos($text, 'Attribution') !== false) {
+            return 'CC-BY-4.0';
+        } else {
+            return 'CC-BY-4.0';
+        }
+    }
+
+    return null;
+}
+
+/**
+ * SPDX ids the license matrix knows about: project licenses, family members and literal patterns.
+ *
+ * @param  array<string, array<string>>  $compatibility
+ * @param  array<string, array<string>>  $groups
+ * @param  array<string, array{0: string, 1: float}>  $license_families
+ * @return array<string>
+ */
+function known_license_ids(array $compatibility, array $groups, array $license_families): array
+{
+    $ids = [...array_keys($compatibility), ...array_keys($license_families)];
+
+    foreach ([...array_values($compatibility), ...array_values($groups)] as $patterns) {
+        foreach ($patterns as $pattern) {
+            if (preg_match('/^[A-Za-z0-9.+-]+$/', $pattern) === 1) {
+                $ids[] = $pattern;
+            }
+        }
+    }
+
+    return array_values(array_unique($ids));
+}
+
+/**
+ * Collect the licenses declared by the files directly inside a LICENSES/ directory.
+ * A file named after a known SPDX id (e.g. MIT.txt) counts as that license, otherwise its content is inspected.
+ *
+ * @param  array<string>  $known_ids
+ * @return array<string>
+ */
+function detect_licenses_from_directory(string $dir, array $known_ids): array
+{
+    if (! is_dir($dir)) {
+        return [];
+    }
+
+    $licenses = [];
+
+    foreach (scandir($dir) ?: [] as $entry) {
+        $path = $dir . '/' . $entry;
+
+        if (str_starts_with($entry, '.') || ! is_file($path) || ! is_readable($path)) {
+            continue;
+        }
+
+        $id = pathinfo($entry, PATHINFO_FILENAME);
+        $license = in_array($id, $known_ids, true)
+            ? $id
+            : detect_license_from_text((string) file_get_contents($path, false, null, 0, 1024));
+
+        if ($license !== null) {
+            $licenses[] = $license;
+        }
+    }
+
+    return array_values(array_unique($licenses));
+}
+
+/**
  * Resolve config path: project scripts/, project config/, then package config.
  *
  * @return string|null path if readable, null otherwise
@@ -308,63 +414,42 @@ function run_license_check(string $project_root, string $config_path, $stdout = 
         $license_path = $project_root . '/LICENSE';
 
         if (is_readable($license_path)) {
-            $license_head = mb_trim((string) file_get_contents($license_path, false, null, 0, 1024));
-
-            if (mb_stripos($license_head, 'GNU AFFERO') !== false || mb_stripos($license_head, 'AGPL') !== false) {
-                $project_license = 'AGPL-3.0-or-later';
-            } elseif (mb_stripos($license_head, 'GNU GENERAL') !== false || mb_stripos($license_head, 'GPL') !== false) {
-                $project_license = 'GPL-3.0-or-later';
-            } elseif (mb_stripos($license_head, 'MIT') !== false) {
-                $project_license = 'MIT';
-            } elseif (mb_stripos($license_head, 'BSD') !== false) {
-                if (mb_stripos($license_head, '2-Clause') !== false || mb_stripos($license_head, 'Simplified BSD') !== false) {
-                    $project_license = 'BSD-2-Clause';
-                } elseif (mb_stripos($license_head, '4-Clause') !== false || mb_stripos($license_head, 'Original BSD') !== false) {
-                    $project_license = 'BSD-4-Clause';
-                } else {
-                    $project_license = 'BSD-3-Clause';
-                }
-            } elseif (mb_stripos($license_head, 'Apache') !== false) {
-                if (mb_stripos($license_head, 'Version 1.0') !== false) {
-                    $project_license = 'Apache-1.0';
-                } elseif (mb_stripos($license_head, 'Version 1.1') !== false) {
-                    $project_license = 'Apache-1.1';
-                } else {
-                    $project_license = 'Apache-2.0';
-                }
-            } elseif (mb_stripos($license_head, 'all rights reserved') !== false) {
-                $project_license = 'proprietary';
-            } elseif (mb_stripos($license_head, 'Creative Commons') !== false || mb_stripos($license_head, 'CC0') !== false) {
-                if (mb_stripos($license_head, 'CC0') !== false || mb_stripos($license_head, 'Public Domain') !== false) {
-                    $project_license = 'CC0-1.0';
-                } elseif (mb_stripos($license_head, 'BY-NC-SA') !== false || mb_stripos($license_head, 'Attribution-NonCommercial-ShareAlike') !== false) {
-                    $project_license = 'CC-BY-NC-SA-4.0';
-                } elseif (mb_stripos($license_head, 'BY-NC ') !== false || (mb_stripos($license_head, 'Attribution-NonCommercial') !== false && mb_stripos($license_head, 'ShareAlike') === false)) {
-                    $project_license = 'CC-BY-NC-4.0';
-                } elseif (mb_stripos($license_head, 'BY-SA') !== false || mb_stripos($license_head, 'Attribution-ShareAlike') !== false) {
-                    $project_license = 'CC-BY-SA-4.0';
-                } elseif (mb_stripos($license_head, 'BY ') !== false || mb_stripos($license_head, 'Attribution') !== false) {
-                    $project_license = 'CC-BY-4.0';
-                } else {
-                    $project_license = 'CC-BY-4.0';
-                }
-            }
+            $project_license = detect_license_from_text(mb_trim((string) file_get_contents($license_path, false, null, 0, 1024)));
         }
     }
 
-    if ($project_license === null || $project_license === '') {
-        fwrite($stderr, "Error: Could not detect project license. Set 'license' in composer.json or package.json, or use a standard LICENSE file." . PHP_EOL);
+    $project_licenses = $project_license === null || $project_license === ''
+        ? detect_licenses_from_directory($project_root . '/LICENSES', known_license_ids($compatibility, $groups, $license_families))
+        : [$project_license];
+
+    if ($project_licenses === []) {
+        fwrite($stderr, "Error: Could not detect project license. Set 'license' in composer.json or package.json, or use a standard LICENSE file or LICENSES/ directory." . PHP_EOL);
 
         return 2;
     }
 
-    if (! isset($compatibility[$project_license])) {
-        fwrite($stderr, "Error: No compatibility rules for project license: {$project_license}. Add it to your license matrix file." . PHP_EOL);
+    foreach ($project_licenses as $license) {
+        if (! isset($compatibility[$license])) {
+            fwrite($stderr, "Error: No compatibility rules for project license: {$license}. Add it to your license matrix file." . PHP_EOL);
 
-        return 2;
+            return 2;
+        }
     }
 
-    $allowed_patterns = expand_allowed_patterns($compatibility[$project_license], $groups);
+    $project_license = implode(' AND ', $project_licenses);
+    $allowed_pattern_sets = array_map(
+        fn (string $license): array => expand_allowed_patterns($compatibility[$license], $groups),
+        $project_licenses,
+    );
+    $is_allowed = function (string $expression) use ($allowed_pattern_sets, $license_families): bool {
+        foreach ($allowed_pattern_sets as $allowed_patterns) {
+            if (! is_license_allowed($expression, $allowed_patterns, $license_families)) {
+                return false;
+            }
+        }
+
+        return true;
+    };
     $has_errors = false;
 
     $use_color = getenv('NO_COLOR') === false
@@ -418,7 +503,7 @@ function run_license_check(string $project_root, string $config_path, $stdout = 
                 $lic_str = 'UNKNOWN';
             }
 
-            $allowed = is_license_allowed(str_replace(', ', ' OR ', $lic_str), $allowed_patterns, $license_families);
+            $allowed = $is_allowed(str_replace(', ', ' OR ', $lic_str));
 
             if (! $allowed) {
                 $has_errors = true;
@@ -458,7 +543,7 @@ function run_license_check(string $project_root, string $config_path, $stdout = 
                 }
                 $lic = mb_trim((string) $lic);
 
-                $allowed = is_license_allowed(str_replace(', ', ' OR ', $lic), $allowed_patterns, $license_families);
+                $allowed = $is_allowed(str_replace(', ', ' OR ', $lic));
 
                 if (! $allowed) {
                     $has_errors = true;

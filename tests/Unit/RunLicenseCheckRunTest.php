@@ -563,3 +563,118 @@ test('run_license_check without npm getter with package.json and node_modules pr
     unlink($dir . '/composer.json');
     rmdir($dir);
 });
+
+function lcc_remove_dir(string $dir): void
+{
+    foreach (array_diff(scandir($dir), ['.', '..']) as $entry) {
+        $path = $dir . '/' . $entry;
+        is_dir($path) ? lcc_remove_dir($path) : unlink($path);
+    }
+
+    rmdir($dir);
+}
+
+function lcc_run(string $dir, string $config): array
+{
+    $out = fopen('php://memory', 'rw');
+    $err = fopen('php://memory', 'rw');
+    $code = run_license_check($dir, $config, $out, $err);
+    rewind($out);
+    rewind($err);
+
+    return [$code, stream_get_contents($out), stream_get_contents($err)];
+}
+
+test('run_license_check falls back to LICENSES/ using SPDX file names', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSES/Apache-2.0.txt', 'irrelevant text');
+    [$code, $stdout] = lcc_run($dir, $this->package_root . '/config/license-compliance.php');
+    expect($code)->toBe(0);
+    expect($stdout)->toContain('Licenses: Apache-2.0');
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check detects LICENSES/ files by content when the name is not an SPDX id and deduplicates', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES/nested', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSES/laravel-locked.md', "# vendor/pkg\n\nSource: https://example.com\n\nThe MIT License (MIT)\n");
+    file_put_contents($dir . '/LICENSES/other-lib.md', "# vendor/other\n\nMIT License\n");
+    file_put_contents($dir . '/LICENSES/.hidden', 'GNU AFFERO GENERAL PUBLIC LICENSE');
+    file_put_contents($dir . '/LICENSES/nested/GPL-3.0-only.txt', 'GNU GENERAL PUBLIC LICENSE');
+    [$code, $stdout] = lcc_run($dir, $this->package_root . '/config/license-compliance.php');
+    expect($code)->toBe(0);
+    expect($stdout)->toContain('Licenses: MIT' . PHP_EOL);
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check requires dependencies compatible with every license in LICENSES/', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSES/MIT.txt', '');
+    file_put_contents($dir . '/LICENSES/Apache-2.0.txt', '');
+    $config = $dir . '/config.php';
+    file_put_contents($config, '<?php return ["compatibility" => ["MIT" => ["MIT", "BSD-3-Clause"], "Apache-2.0" => ["MIT", "Apache-2.0"]], "license_families" => [], "groups" => []];');
+
+    file_put_contents($dir . '/composer.lock', json_encode(['packages' => [['name' => 'a/a', 'version' => '1.0', 'license' => ['MIT']]]]));
+    [$code, $stdout] = lcc_run($dir, $config);
+    expect($code)->toBe(0);
+    expect($stdout)->toContain('Licenses: Apache-2.0 AND MIT');
+
+    file_put_contents($dir . '/composer.lock', json_encode(['packages' => [['name' => 'b/b', 'version' => '1.0', 'license' => ['BSD-3-Clause']]]]));
+    [$code, $stdout] = lcc_run($dir, $config);
+    expect($code)->toBe(1);
+    expect($stdout)->toContain('not compatible with Apache-2.0 AND MIT');
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check reports the LICENSES/ license missing from the matrix', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSES/MIT.txt', '');
+    file_put_contents($dir . '/LICENSES/Apache-2.0.txt', '');
+    $config = $dir . '/config.php';
+    file_put_contents($config, '<?php return ["compatibility" => ["MIT" => ["MIT", "Apache-2.0"]], "license_families" => [], "groups" => []];');
+    [$code, , $stderr] = lcc_run($dir, $config);
+    expect($code)->toBe(2);
+    expect($stderr)->toContain('No compatibility rules for project license: Apache-2.0');
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check prefers LICENSE over LICENSES/', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSE', 'GNU AFFERO GENERAL PUBLIC LICENSE');
+    file_put_contents($dir . '/LICENSES/MIT.txt', '');
+    [$code, $stdout] = lcc_run($dir, $this->package_root . '/config/license-compliance.php');
+    expect($code)->toBe(0);
+    expect($stdout)->toContain('Licenses: AGPL-3.0-or-later' . PHP_EOL);
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check returns 2 when LICENSES/ has no recognizable license', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir . '/LICENSES', 0777, true);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSES/notes.md', 'nothing useful here');
+    [$code, , $stderr] = lcc_run($dir, $this->package_root . '/config/license-compliance.php');
+    expect($code)->toBe(2);
+    expect($stderr)->toContain('Could not detect');
+    lcc_remove_dir($dir);
+});
+
+test('run_license_check does not mistake words like "permitted" for MIT', function (): void {
+    $dir = sys_get_temp_dir() . '/lcc_run_' . uniqid();
+    mkdir($dir);
+    file_put_contents($dir . '/composer.json', '{}');
+    file_put_contents($dir . '/LICENSE', "BSD 3-Clause License\n\nRedistribution and use in source and binary forms, with or without modification, are permitted.");
+    [$code, $stdout] = lcc_run($dir, $this->package_root . '/config/license-compliance.php');
+    expect($code)->toBe(0);
+    expect($stdout)->toContain('Licenses: BSD-3-Clause');
+    lcc_remove_dir($dir);
+});

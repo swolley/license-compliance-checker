@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Project license fallback to the `LICENSES/` directory when `composer.json`, `package.json` and `LICENSE` give no match. Files named after an SPDX id known to the license matrix (e.g. `MIT.txt`) count as that license, other files are detected from their content. With several licenses, each dependency must be compatible with all of them.
+
+### Fixed
+
+- `LICENSE` detection no longer reads words such as "permitted" as MIT.
+
 ## [1.0.0] - 2025-02-27
 
 ### Added
