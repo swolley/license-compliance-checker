@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** rewritten as a single bash script (`check-licenses`, bash 4+ and `jq`); PHP and Composer are no longer needed and the Composer package is removed (1.x stays available from its tags).
+- **Breaking:** rewritten as a single bash script (`check-licenses`, bash 4.4+ and `jq`); PHP and Composer are no longer needed and the Composer package is removed (1.x stays available from its tags).
 - **Breaking:** the config is `.license-compliance` (one directive per line: `project-license`, `exclude`, `include`, `allow`, `group`, `matrix`); `license-compliance.php` is no longer read. See "Migrating from 1.x" in the README.
 - The built-in matrix is the 1.x one, plus `Unlicense`.
 - npm licenses are read from the `package.json` files in `node_modules` (no more `npx license-checker`).

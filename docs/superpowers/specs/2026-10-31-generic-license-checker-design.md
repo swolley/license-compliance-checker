@@ -10,12 +10,12 @@ Successo: lo stesso comando, senza configurazione, produce un esito sensato su u
 
 ## 2. Decisioni prese
 
-- Implementazione in **bash 4 o superiore**, uno script unico `check-licenses`.
+- Implementazione in **bash 4.4 o superiore**, uno script unico `check-licenses`.
 - **`jq` obbligatorio**. È dichiarato nel README (requisiti) e lo script esce con errore chiaro se manca.
 - Si controllano **tutti i riferimenti a file di licenza ovunque siano** nell'albero, non solo i percorsi dei gestori di pacchetti.
 - Il file di configurazione passa a un formato a righe leggibile da bash. Il vecchio `license-compliance.php` non si legge più; si fornisce una conversione una tantum.
 - Stesso repo e stesso nome, versione major nuova (2.0.0). Composer non è più il canale unico di installazione.
-- Supporto: Linux e macOS (con bash 4 da Homebrew), Windows tramite Git Bash.
+- Supporto: Linux e macOS (con bash 4.4 o superiore da Homebrew), Windows tramite Git Bash.
 
 ## 3. Architettura
 
@@ -90,7 +90,7 @@ La matrice e i gruppi di default sono incorporati nello script (quelli di oggi, 
 - Branch `feat/generic-bash-checker`, release 2.0.0 con lo script come asset; installazione con `curl` o copia dello script.
 - `bin/check-licenses` PHP, `src/`, `composer.json` e i test Pest escono dal repo; il vecchio comportamento resta nella 1.x.
 - Nessuno script di conversione: il README ha una tabella che mappa `license_families`, `groups` e `compatibility` di `license-compliance.php` sulle direttive di `.license-compliance`.
-- README riscritto: requisiti (bash 4, jq), uso, formato della config, esempi per ecosistema.
+- README riscritto: requisiti (bash 4.4, jq), uso, formato della config, esempi per ecosistema.
 
 ## 8. Fuori ambito
 

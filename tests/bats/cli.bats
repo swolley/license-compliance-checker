@@ -4,7 +4,7 @@ setup() {
 
 @test "missing jq exits 2 with a message naming jq" {
     mkdir -p "$BATS_TEST_TMPDIR/bin"
-    run env -i PATH="$BATS_TEST_TMPDIR/bin" /usr/bin/bash "$LCC_ROOT/check-licenses" --path "$BATS_TEST_TMPDIR"
+    run env -i PATH="$BATS_TEST_TMPDIR/bin" "$BASH" "$LCC_ROOT/check-licenses" --path "$BATS_TEST_TMPDIR"
     [ "$status" -eq 2 ]
     [[ "$output" == *jq* ]]
 }

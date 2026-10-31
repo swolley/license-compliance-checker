@@ -6,13 +6,13 @@
 
 **Architecture:** Uno script `check-licenses` con quattro stadi (`discover`, `detect`, `evaluate`, `report`) che si passano record TSV a 6 campi. Il motore delle regole è il porting della logica PHP esistente. I test sono in bats; lo script si può caricare con `LCC_SOURCE_ONLY=1` per chiamare le singole funzioni.
 
-**Tech Stack:** bash 4+, jq, bats-core, GitHub Actions (Linux e macOS).
+**Tech Stack:** bash 4.4+, jq, bats-core, GitHub Actions (Linux e macOS).
 
 **Spec:** `docs/superpowers/specs/2026-10-31-generic-license-checker-design.md`
 
 ## Global Constraints
 
-- Bash 4 o superiore, `jq` obbligatorio: se manca uno dei due, messaggio chiaro ed exit 2.
+- Bash 4.4 o superiore, `jq` obbligatorio: se manca uno dei due, messaggio chiaro ed exit 2.
 - Codici di uscita: 0 nessuna voce `vietata`; 1 almeno una `vietata` (con `--strict` anche `da verificare`); 2 errore d'uso.
 - Esiti per voce: `ok`, `forbidden`, `review` (in italiano nella spec: `vietata`, `da verificare`). Una licenza non riconosciuta, vuota o `UNKNOWN` non è mai `ok`.
 - Config di progetto: `.license-compliance` nella radice (o `--config`), una direttiva per riga, `#` per i commenti. Direttive: `project-license`, `exclude`, `include`, `allow`, `group`, `matrix`.
@@ -179,6 +179,6 @@
 
 - [ ] **Step 1: Write** il workflow: matrice `ubuntu-latest` e `macos-latest`, su macOS `brew install bash bats-core jq`, su Linux `apt-get install -y bats jq`; esegue `bats tests/bats` e `shellcheck check-licenses`.
 - [ ] **Step 2: Remove** i file PHP; il vecchio comportamento resta nella 1.x (tag esistenti).
-- [ ] **Step 3: Rewrite** `README.md`: requisiti (bash 4+, `jq`, in evidenza), installazione con `curl`, uso, formato di `.license-compliance` con un esempio per ecosistema, tabella di conversione dal vecchio `license-compliance.php` (`license_families`, `groups`, `compatibility`). `CHANGELOG.md`: voce 2.0.0 con le modifiche incompatibili.
+- [ ] **Step 3: Rewrite** `README.md`: requisiti (bash 4.4+, `jq`, in evidenza), installazione con `curl`, uso, formato di `.license-compliance` con un esempio per ecosistema, tabella di conversione dal vecchio `license-compliance.php` (`license_families`, `groups`, `compatibility`). `CHANGELOG.md`: voce 2.0.0 con le modifiche incompatibili.
 - [ ] **Step 4: Run** `bats tests/bats` e `./check-licenses --path .` sul repo stesso. Expected: test PASS; il comando termina con un esito coerente.
 - [ ] **Step 5: Commit** `feat!: generic bash license checker, remove the PHP implementation`.

@@ -145,3 +145,45 @@ JSON
     [ "$(wc -l <<<"$output")" -eq 2000 ]
     [ "$(wc -l <"$count")" -le 5 ]
 }
+
+@test "a package.json without a name (a type stub) is not a package" {
+    pkg node_modules/foo '{"name":"foo","version":"1.0.0","license":"MIT"}'
+    pkg node_modules/foo/esm '{"type":"module"}'
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 1 ]
+    [ "$(rec "$output" 1)" = "foo" ]
+}
+
+@test "headers inside a package with the same license add no row" {
+    pkg node_modules/foo '{"name":"foo","version":"1.0.0","license":"MIT"}' 
+    cp "$TEXTS/MIT.txt" "$P/node_modules/foo/LICENSE"
+    mkdir -p "$P/node_modules/foo/lib/deep"
+    printf '// SPDX-License-Identifier: MIT\n' >"$P/node_modules/foo/lib/a.js"
+    printf '// SPDX-License-Identifier: MIT\n' >"$P/node_modules/foo/lib/deep/b.js"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 1 ]
+}
+
+@test "a header with a different license inside a package is kept" {
+    pkg node_modules/foo '{"name":"foo","version":"1.0.0","license":"MIT"}'
+    mkdir -p "$P/node_modules/foo/lib"
+    printf '// SPDX-License-Identifier: GPL-3.0-only\n' >"$P/node_modules/foo/lib/a.js"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 2 ]
+    [[ "$output" == *"GPL-3.0-only${LCC_FS}header"* ]]
+}
+
+@test "500 packages with a LICENSE and a header are checked in a reasonable time" {
+    for i in $(seq 1 500); do
+        d="$P/node_modules/pkg$i"
+        mkdir -p "$d/lib"
+        printf '{"name":"pkg%s","version":"1.0.0","license":"MIT"}\n' "$i" >"$d/package.json"
+        cp "$TEXTS/MIT.txt" "$d/LICENSE"
+        printf '// SPDX-License-Identifier: MIT\n' >"$d/lib/index.js"
+    done
+    start=$SECONDS
+    run lcc_discover "$P"
+    elapsed=$((SECONDS - start))
+    [ "$(wc -l <<<"$output")" -eq 500 ]
+    [ "$elapsed" -lt 20 ]
+}

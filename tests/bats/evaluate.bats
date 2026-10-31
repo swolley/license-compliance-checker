@@ -155,3 +155,19 @@ evaluate_one() { # project license, then mkrec args
     [ "$(field "$output" 4)" = "MIT" ]
     [ "$(field "$output" 5)" = "file" ]
 }
+
+@test "a license token that looks like a glob is not expanded against the working directory" {
+    mkdir "$BATS_TEST_TMPDIR/cwd"
+    cd "$BATS_TEST_TMPDIR/cwd"
+    touch MIT
+    run evaluate_one proprietary dep 1.0 dep "*" manifest ""
+    [ "$(field "$output" 7)" = "review" ]
+}
+
+@test "README in the root LICENSES directory does not become part of the project license" {
+    mkdir -p "$P/LICENSES"
+    cp "$TEXTS/MIT.txt" "$P/LICENSES/MIT.txt"
+    printf 'This folder holds the licenses.\n' >"$P/LICENSES/README.md"
+    run lcc_detect_project_license "$P"
+    [ "$output" = "MIT" ]
+}

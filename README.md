@@ -8,7 +8,7 @@ C++ project with `vendors/`, an npm or Composer project, a Rust or Python one.
 
 ## Requirements
 
-- **bash 4 or later** (macOS ships 3.2: `brew install bash`; on Windows use Git Bash)
+- **bash 4.4 or later** (macOS ships 3.2: `brew install bash`; on Windows use Git Bash)
 - **[jq](https://jqlang.github.io/jq/)** (`apt install jq`, `brew install jq`, `pacman -S jq`). The script stops with a clear error if jq is missing.
 
 ## Installation

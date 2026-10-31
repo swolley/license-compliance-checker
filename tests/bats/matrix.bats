@@ -122,3 +122,13 @@ refute_allowed() { run lcc_is_allowed "$@"; [ "$status" -eq 1 ]; }
     run lcc_is_allowed "(MIT OR Foo) AND ISC" MIT ISC
     [ "$status" -eq 2 ]
 }
+
+@test "a wildcard pattern does not accept a compound expression" {
+    refute_allowed "BSD-3-Clause AND CC-BY-NC-4.0" 'BSD-*'
+    refute_allowed "GPL-3.0-only AND LicenseRef-Proprietary" 'GPL-*'
+    refute_match "BSD-3-Clause AND CC-BY-NC-4.0" 'BSD-*'
+}
+
+@test "a license with an exception is not accepted by a wildcard" {
+    refute_allowed "Apache-2.0 WITH LLVM-exception" 'Apache-*'
+}

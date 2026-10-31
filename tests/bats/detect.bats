@@ -114,3 +114,19 @@ assert_detects() { # expected id, fixture file
     [ "$status" -eq 0 ]
     [ "$output" = "(GPL-2.0-only WITH Classpath-exception-2.0 OR MIT)" ]
 }
+
+@test "full license texts keep their id" {
+    local id
+    for id in GPL-2.0-only GPL-3.0-only LGPL-2.1-only LGPL-3.0-only AGPL-3.0-only MPL-2.0 Apache-2.0; do
+        run lcc_detect_text "$TEXTS/full/$id.txt"
+        [ "$status" -eq 0 ]
+        [ "$output" = "$id" ] || { echo "$id detected as $output"; false; }
+    done
+}
+
+@test "README in a LICENSES directory is not a license id" {
+    run lcc_license_from_filename "/p/LICENSES/README.md"
+    [ "$status" -eq 1 ]
+    run lcc_license_from_filename "/p/LICENSES/readme.txt"
+    [ "$status" -eq 1 ]
+}

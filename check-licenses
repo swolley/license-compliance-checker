@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-licenses: check the licenses of a project's dependencies against the project license.
-# Requires bash 4+ and jq. See README.md.
+# Requires bash 4.4+ and jq. See README.md.
 
 LCC_VERSION="2.0.0"
 
@@ -14,8 +14,8 @@ lcc_die() {
 }
 
 lcc_require_env() {
-    if ((BASH_VERSINFO[0] < 4)); then
-        lcc_die "bash 4 or later is required (found ${BASH_VERSION})"
+    if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+        lcc_die "bash 4.4 or later is required (found ${BASH_VERSION})"
     fi
     command -v jq >/dev/null 2>&1 || lcc_die "jq is required but was not found in PATH"
 }
@@ -162,6 +162,8 @@ lcc_license_matches() {
     shift
     license="${license#"${license%%[![:space:]]*}"}"
     license="${license%"${license##*[![:space:]]}"}"
+    # a compound expression (spaces) is never a single license id: patterns must not match it whole
+    [[ "$license" != *[[:space:]]* ]] || return 1
 
     for pattern in "$@"; do
         if [[ "$pattern" == *-\* ]]; then
@@ -228,44 +230,72 @@ lcc_patterns_for() {
     lcc_expand_patterns "${raw[@]}"
 }
 
-# Print the head (16 KB) of a text file, lower-cased with whitespace squeezed.
-# Fails for empty and binary files.
-lcc__read_head() {
-    head -c 16384 -- "$1" 2>/dev/null | grep -qI . || return 1
-    head -c 16384 -- "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -s '[:space:]' ' '
+# lcc__clean_to VAR VALUE : set VAR to VALUE made safe to be a record field (no fork).
+lcc__clean_to() {
+    local _s="$2"
+    _s="${_s//$'\t'/ }"
+    _s="${_s//$'\n'/ }"
+    _s="${_s//$LCC_FS/ }"
+    printf -v "$1" '%s' "$_s"
 }
 
-# lcc_detect_text FILE : print the SPDX id recognised in a license text; exit 1 when unknown.
-lcc_detect_text() {
-    local t g suffix id=""
-    t="$(lcc__read_head "$1")" || return 1
+# lcc__read_head FILE : set REPLY to the head (16 KB) of a text file, lower-cased with whitespace squeezed.
+# Fails for empty and binary files (a NUL byte inside the head). No fork.
+lcc__read_head() {
+    local LC_ALL=C t="" rc=0 # bytes, not characters: texts may hold multibyte characters (the (c) sign)
+    IFS= read -r -d '' -n 16384 t 2>/dev/null <"$1" || rc=$?
+    [[ -n "$t" ]] || return 1
+    # read stops at a NUL byte before 16384 characters with status 0; at the end of a text file it returns 1
+    if ((rc == 0 && ${#t} < 16384)); then return 1; fi
+    t="${t,,}"
+    t="${t//[$'\t\r\n']/ }"
+    while [[ "$t" == *"  "* ]]; do t="${t//  / }"; done
+    REPLY="$t"
+}
 
-    # The GNU licenses are recognized by their title or notice at the top of the text; other
-    # licenses (MPL-2.0 names three GNU licenses as secondary licenses) only quote them further down.
+# lcc__detect_text FILE : set REPLY to the SPDX id recognised in a license text; fail when unknown.
+lcc__detect_text() {
+    local t g suffix id="" best="" bestpos=99999 pos pre title
+    lcc__read_head "$1" || return 1
+    t="$REPLY"
+
+    # The GNU licenses are recognized by the title or notice at the top of the text, the family being the
+    # title that comes first (the GPL-2 preamble mentions the LGPL, the LGPL-3 text quotes the GPL, and MPL-2.0
+    # names three GNU licenses as secondary licenses further down).
     g="${t:0:800}"
     suffix="-only"
     [[ "$g" == *"any later version"* ]] && suffix="-or-later"
+    for title in "gnu affero general public license" "gnu lesser general public license" "gnu library general public license" "gnu general public license"; do
+        pre="${g%%"$title"*}"
+        [[ "$pre" != "$g" ]] || continue
+        pos=${#pre}
+        if ((pos < bestpos)); then bestpos=$pos best="$title"; fi
+    done
 
     if [[ "$t" == *"mozilla public license"* && "$t" == *"version 2.0"* ]]; then
         id="MPL-2.0"
     elif [[ "$t" == *"apache license"* && "$t" == *"version 2.0"* ]]; then
         id="Apache-2.0"
-    elif [[ "$g" == *"gnu affero general public license"* ]]; then
-        id="AGPL-3.0${suffix}"
-    elif [[ "$g" == *"gnu lesser general public license"* || "$g" == *"gnu library general public license"* ]]; then
-        if [[ "$g" == *"version 2.1"* ]]; then
-            id="LGPL-2.1${suffix}"
-        elif [[ "$g" == *"version 3"* ]]; then
-            id="LGPL-3.0${suffix}"
-        else
-            id="LGPL-2.0${suffix}"
-        fi
-    elif [[ "$g" == *"gnu general public license"* ]]; then
-        if [[ "$g" == *"version 3"* ]]; then
-            id="GPL-3.0${suffix}"
-        elif [[ "$g" == *"version 2"* ]]; then
-            id="GPL-2.0${suffix}"
-        fi
+    elif [[ -n "$best" ]]; then
+        case "$best" in
+            *affero*) id="AGPL-3.0${suffix}" ;;
+            *lesser* | *library*)
+                if [[ "$g" == *"version 2.1"* ]]; then
+                    id="LGPL-2.1${suffix}"
+                elif [[ "$g" == *"version 3"* ]]; then
+                    id="LGPL-3.0${suffix}"
+                else
+                    id="LGPL-2.0${suffix}"
+                fi
+                ;;
+            *)
+                if [[ "$g" == *"version 3"* ]]; then
+                    id="GPL-3.0${suffix}"
+                elif [[ "$g" == *"version 2"* ]]; then
+                    id="GPL-2.0${suffix}"
+                fi
+                ;;
+        esac
     elif [[ "$t" == *"cc0 1.0 universal"* ]]; then
         id="CC0-1.0"
     elif [[ "$t" == *"free and unencumbered software released into the public domain"* ]]; then
@@ -289,40 +319,60 @@ lcc_detect_text() {
     fi
 
     [[ -n "$id" ]] || return 1
-    printf '%s\n' "$id"
+    REPLY="$id"
 }
 
-# lcc_license_from_filename PATH : LICENSES/<id>.txt (REUSE layout) gives <id>.
-lcc_license_from_filename() {
-    local base dir
-    base="$(basename -- "$1")"
-    dir="$(basename -- "$(dirname -- "$1")")"
+# lcc_detect_text FILE : print the SPDX id recognised in a license text; exit 1 when unknown.
+lcc_detect_text() {
+    lcc__detect_text "$1" || return 1
+    printf '%s\n' "$REPLY"
+}
+
+# lcc__license_from_filename PATH : LICENSES/<id>.txt (REUSE layout) sets REPLY to <id>.
+lcc__license_from_filename() {
+    local path="$1" base dir
+    base="${path##*/}"
+    dir="${path%/*}"
+    dir="${dir##*/}"
     [[ "$dir" == "LICENSES" ]] || return 1
     base="${base%.txt}"
     base="${base%.md}"
-    [[ -n "$base" ]] || return 1
-    printf '%s\n' "$base"
+    [[ "$base" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]*$ ]] || return 1
+    case "${base,,}" in readme | readme.* | index | changelog) return 1 ;; esac
+    REPLY="$base"
 }
 
-# lcc_detect_spdx_header FILE : print the SPDX-License-Identifier expression found in the first 30 lines.
-lcc_detect_spdx_header() {
+lcc_license_from_filename() {
+    lcc__license_from_filename "$1" || return 1
+    printf '%s\n' "$REPLY"
+}
+
+# lcc__spdx_header FILE : set REPLY to the SPDX-License-Identifier expression found in the first 30 lines.
+lcc__spdx_header() {
+    local -a lines=()
     local line expr
-    line="$(head -n 30 -- "$1" 2>/dev/null | head -c 8192 | grep -I -m 1 'SPDX-License-Identifier:')" || return 1
-    expr="${line#*SPDX-License-Identifier:}"
-    expr="$(printf '%s' "$expr" | sed -E 's/[[:space:]]*(\*\/|-->|#\}|\}\})[[:space:]]*$//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
-    # ids joined by AND / OR / WITH: anything else is prose that merely quotes the tag
     local re='^[(]*[A-Za-z0-9.+-]+([)]* (AND|OR|WITH) [(]*[A-Za-z0-9.+-]+)*[)]*$'
-    [[ "$expr" =~ $re ]] || return 1
-    printf '%s\n' "$expr"
+    mapfile -n 30 -t lines 2>/dev/null <"$1" || return 1
+    for line in "${lines[@]}"; do
+        [[ "$line" == *"SPDX-License-Identifier:"* ]] || continue
+        expr="${line#*SPDX-License-Identifier:}"
+        expr="${expr%%\*/*}"
+        expr="${expr%%-->*}"
+        expr="${expr%%#\}*}"
+        expr="${expr%%\}\}*}"
+        expr="${expr#"${expr%%[![:space:]]*}"}"
+        expr="${expr%"${expr##*[![:space:]]}"}"
+        # ids joined by AND / OR / WITH: anything else is prose that merely quotes the tag
+        [[ "$expr" =~ $re ]] || return 1
+        REPLY="$expr"
+        return 0
+    done
+    return 1
 }
 
-# Make a value safe to be a record field.
-lcc__clean() {
-    local s="$1"
-    s="${s//$'\t'/ }"
-    s="${s//$'\n'/ }"
-    s="${s//$LCC_FS/ }"
-    printf '%s' "$s"
+lcc_detect_spdx_header() {
+    lcc__spdx_header "$1" || return 1
+    printf '%s\n' "$REPLY"
 }
 
 # Exclusions in effect: LCC_EXCLUDE minus LCC_INCLUDE, one per line.
@@ -413,9 +463,15 @@ lcc__discover_files() {
 
     # 3. one record per directory with license files
     local source license note name path
+    local -a _f=()
     for dir in "${!dirfiles[@]}"; do
         [[ "$dir" != "." ]] || continue
-        mapfile -t main < <(IFS=$LCC_FS read -ra _f <<<"${dirfiles[$dir]}" && printf '%s\n' "${_f[@]}" | LC_ALL=C sort)
+        IFS=$LCC_FS read -ra _f <<<"${dirfiles[$dir]}"
+        if ((${#_f[@]} > 1)); then
+            mapfile -t main < <(printf '%s\n' "${_f[@]}" | LC_ALL=C sort)
+        else
+            main=("${_f[@]}")
+        fi
         notices=()
         local -a keep=()
         for f in "${main[@]}"; do
@@ -432,13 +488,18 @@ lcc__discover_files() {
         ids=()
         unknown=()
         for f in "${main[@]}"; do
-            id="$(lcc_license_from_filename "$root/$f" || lcc_detect_text "$root/$f")" || id=""
-            if [[ -n "$id" ]]; then ids+=("$id"); else unknown+=("${f##*/}"); fi
+            if lcc__license_from_filename "$root/$f" || lcc__detect_text "$root/$f"; then
+                ids+=("$REPLY")
+            else
+                unknown+=("${f##*/}")
+            fi
         done
 
         license="" note=""
         if ((${#ids[@]})); then
-            mapfile -t ids < <(printf '%s\n' "${ids[@]}" | LC_ALL=C sort -u)
+            if ((${#ids[@]} > 1)); then
+                mapfile -t ids < <(printf '%s\n' "${ids[@]}" | LC_ALL=C sort -u)
+            fi
             license="${ids[0]}"
             for ((n = 1; n < ${#ids[@]}; n++)); do license+=" AND ${ids[n]}"; done
             ((${#ids[@]} > 1)) && note="multiple license files"
@@ -452,17 +513,20 @@ lcc__discover_files() {
 
         source="file"
         [[ -z "${subs[$dir]:-}" ]] || source="submodule"
-        out+=("$(lcc__clean "$dir")${LCC_FS}${LCC_FS}$(lcc__clean "${main[0]}")${LCC_FS}${license}${LCC_FS}${source}${LCC_FS}${note}")
+        lcc__clean_to name "$dir"
+        lcc__clean_to path "${main[0]}"
+        out+=("${name}${LCC_FS}${LCC_FS}${path}${LCC_FS}${license}${LCC_FS}${source}${LCC_FS}${note}")
     done
 
     # 4. submodules without license files (or not checked out)
     for sp in "${!subs[@]}"; do
         [[ -z "${dirfiles[$sp]:-}" ]] || continue
-        out+=("$(lcc__clean "$sp")${LCC_FS}${LCC_FS}$(lcc__clean "$sp")${LCC_FS}${LCC_FS}submodule${LCC_FS}no license file found (submodule may not be checked out)")
+        lcc__clean_to name "$sp"
+        out+=("${name}${LCC_FS}${LCC_FS}${name}${LCC_FS}${LCC_FS}submodule${LCC_FS}no license file found (submodule may not be checked out)")
     done
 
     # 5. SPDX headers in the first 30 lines of any text file: one record per directory and expression
-    local -a grep_args=(-rIn -Z -m 1)
+    local -a grep_args=(-rIn --null -m 1)
     while IFS= read -r e; do
         if [[ "$e" == */* ]]; then slash_excludes+=("$e"); else grep_args+=("--exclude-dir=$e"); fi
     done < <(lcc__effective_excludes)
@@ -474,20 +538,25 @@ lcc__discover_files() {
         rel="${file#"$root"/}"
         [[ "$rel" != *$'\n'* && "$rel" != *"$LCC_FS"* && "$rel" == */* ]] || continue
         hit=0
-        for e in "${slash_excludes[@]}"; do
+        for e in ${slash_excludes[@]+"${slash_excludes[@]}"}; do
             [[ "/$rel" == *"/$e/"* ]] && hit=1
         done
         ((hit == 0)) || continue
-        expr="$(lcc_detect_spdx_header "$file")" || continue
+        lcc__spdx_header "$file" || continue
+        expr="$REPLY"
         dir="${rel%/*}"
         key="${dir}${LCC_FS}${expr}"
         if [[ -z "${hdr[$key]:-}" || "$rel" < "${hdr[$key]}" ]]; then hdr[$key]="$rel"; fi
     done < <(grep "${grep_args[@]}" 'SPDX-License-Identifier:' "$root" 2>/dev/null)
 
+    local hp hl
     for key in "${!hdr[@]}"; do
         dir="${key%%"$LCC_FS"*}"
         expr="${key#*"$LCC_FS"}"
-        out+=("$(lcc__clean "$dir")${LCC_FS}${LCC_FS}$(lcc__clean "${hdr[$key]}")${LCC_FS}$(lcc__clean "$expr")${LCC_FS}header${LCC_FS}")
+        lcc__clean_to name "$dir"
+        lcc__clean_to hp "${hdr[$key]}"
+        lcc__clean_to hl "$expr"
+        out+=("${name}${LCC_FS}${LCC_FS}${hp}${LCC_FS}${hl}${LCC_FS}header${LCC_FS}")
     done
 
     ((${#out[@]})) || return 0
@@ -520,7 +589,8 @@ lcc__package_program() {
             elif (.licenses | type) == "array" then
                 ([.licenses[] | if type == "string" then . else (.type // "") end] | map(select(. != "")) | join(" OR "))
             else "" end;
-        [ (.name // (input_filename | sub("/?package\\.json$"; ""))),
+        select(.name | type == "string" and length > 0)
+        | [ .name,
           (.version // ""),
           input_filename,
           (lic | gsub("^\\((?<x>.*)\\)$"; .x)),
@@ -573,9 +643,13 @@ lcc_read_flat_manifest() {
     esac
     [[ -n "$name" ]] || name="${file%/*}"
     [[ "$license" != \(*\) ]] || license="${license:1:${#license}-2}"
+    local c_name c_version c_file c_license
+    lcc__clean_to c_name "$name"
+    lcc__clean_to c_version "$version"
+    lcc__clean_to c_file "$file"
+    lcc__clean_to c_license "$license"
     printf '%s%s%s%s%s%s%s%s%s%s\n' \
-        "$(lcc__clean "$name")" "$LCC_FS" "$(lcc__clean "$version")" "$LCC_FS" "$(lcc__clean "$file")" "$LCC_FS" \
-        "$(lcc__clean "$license")" "$LCC_FS" "manifest" "$LCC_FS"
+        "$c_name" "$LCC_FS" "$c_version" "$LCC_FS" "$c_file" "$LCC_FS" "$c_license" "$LCC_FS" "manifest" "$LCC_FS"
 }
 
 # lcc__discover_manifests ROOT : manifest records of every package manifest below ROOT.
@@ -599,19 +673,19 @@ lcc__discover_manifests() {
     for f in ${flat[@]+"${flat[@]}"}; do lcc_read_flat_manifest "$f"; done
 }
 
-# lcc_record_key NAME PATH SOURCE : directory-like key under which sources of one package are merged.
+# lcc_record_key NAME PATH SOURCE : set REPLY to the directory-like key under which the sources of one package merge.
 lcc_record_key() {
     local name="$1" path="$2" source="$3" d
     if [[ "$source" == "manifest" ]]; then
         if [[ "${path##*/}" == "composer.lock" ]]; then
-            printf 'vendor/%s' "$name"
+            REPLY="vendor/${name}"
         else
             d="${path%/*}"
             [[ "$path" == */* ]] || d="."
-            printf '%s' "$d"
+            REPLY="$d"
         fi
     else
-        printf '%s' "$name"
+        REPLY="$name"
     fi
 }
 
@@ -624,10 +698,17 @@ lcc__norm_license() {
     printf '%s\n' "${t[@]}" | LC_ALL=C sort | tr '\n' ' '
 }
 
+# True when two license expressions say the same thing (cheap string test first).
+lcc__same_license() {
+    [[ "$1" != "$2" ]] || return 0
+    [[ "$(lcc__norm_license "$1")" == "$(lcc__norm_license "$2")" ]]
+}
+
 # lcc_merge_records : read records on stdin, write them with manifest/file/submodule sources of the
-# same package merged. Header records pass through. Disagreeing licenses keep the declared one plus a note.
+# same package merged. Disagreeing licenses keep the declared one plus a note. Header records pass
+# through, except those that repeat the license of the package record that covers their directory.
 lcc_merge_records() {
-    local -A k_name=() k_ver=() k_mpath=() k_fpath=() k_mlic=() k_flic=() k_msrc=() k_fsrc=() k_note=() k_fnote=() k_seen=()
+    local -A k_name=() k_ver=() k_mpath=() k_fpath=() k_mlic=() k_flic=() k_msrc=() k_fsrc=() k_note=() k_fnote=() k_seen=() k_out=()
     local -a order=() pass=()
     local name ver path lic src note key
     while IFS=$LCC_FS read -r name ver path lic src note; do
@@ -636,7 +717,8 @@ lcc_merge_records() {
             pass+=("${name}${LCC_FS}${ver}${LCC_FS}${path}${LCC_FS}${lic}${LCC_FS}${src}${LCC_FS}${note}")
             continue
         fi
-        key="$(lcc_record_key "$name" "$path" "$src")"
+        lcc_record_key "$name" "$path" "$src"
+        key="$REPLY"
         if [[ -z "${k_seen[$key]:-}" ]]; then
             k_seen[$key]=1
             order+=("$key")
@@ -660,7 +742,7 @@ lcc_merge_records() {
 
         if [[ -n "$mlic" && -n "$flic" ]]; then
             out_lic="$mlic"
-            if [[ "$(lcc__norm_license "$mlic")" != "$(lcc__norm_license "$flic")" ]]; then
+            if ! lcc__same_license "$mlic" "$flic"; then
                 out_note+="${out_note:+; }declared ${mlic}, text says ${flic}"
             fi
         elif [[ -n "$mlic" ]]; then
@@ -670,12 +752,29 @@ lcc_merge_records() {
             out_lic="$flic"
         fi
         [[ -z "$fnote" ]] || out_note+="${out_note:+; }${fnote}"
+        k_out[$key]="$out_lic"
 
         printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
             "${k_name[$key]}" "$LCC_FS" "${k_ver[$key]:-}" "$LCC_FS" "${k_fpath[$key]:-${k_mpath[$key]:-}}" "$LCC_FS" \
             "$out_lic" "$LCC_FS" "$srcs" "$LCC_FS" "$out_note"
     done
-    if ((${#pass[@]})); then printf '%s\n' "${pass[@]}"; fi
+
+    local rec d keep
+    for rec in ${pass[@]+"${pass[@]}"}; do
+        IFS=$LCC_FS read -r name ver path lic src note <<<"$rec"
+        keep=1
+        d="$name"
+        while :; do
+            if [[ -n "${k_out[$d]+x}" ]]; then
+                # nearest covering package record: a header repeating its license adds nothing
+                if [[ -n "${k_out[$d]}" ]] && lcc__same_license "${k_out[$d]}" "$lic"; then keep=0; fi
+                break
+            fi
+            [[ "$d" == */* ]] || break
+            d="${d%/*}"
+        done
+        if ((keep)); then printf '%s\n' "$rec"; fi
+    done
 }
 
 # lcc_discover ROOT : print the merged, sorted records of everything found below ROOT.
@@ -753,10 +852,12 @@ lcc_resolve_project_license() {
 # True when every license id of an expression is in LCC_KNOWN_PATTERNS (or is a matrix/family key).
 lcc__all_known() {
     local tok
+    local -a toks
     local s="${1//[()]/ }"
     s="${s// AND / }"
     s="${s// OR / }"
-    for tok in $s; do
+    read -ra toks <<<"$s"
+    for tok in ${toks[@]+"${toks[@]}"}; do
         [[ -n "${LCC_MATRIX[$tok]+x}" || -n "${LCC_FAMILIES[$tok]+x}" ]] && continue
         lcc_license_matches "$tok" "${LCC_KNOWN_PATTERNS[@]}" || return 1
     done
@@ -766,6 +867,7 @@ lcc__all_known() {
 # True when the dependency has an allow line covering every license id of the expression.
 lcc__allow_exception() {
     local name="$1" lic="$2" tok list
+    local -a toks
     [[ -n "${LCC_ALLOW[$name]+x}" ]] || return 1
     list=" ${LCC_ALLOW[$name]} "
     [[ "$list" != *" * "* ]] || return 0
@@ -773,7 +875,8 @@ lcc__allow_exception() {
     s="${s// AND / }"
     s="${s// OR / }"
     [[ -n "${s// /}" ]] || return 1
-    for tok in $s; do
+    read -ra toks <<<"$s"
+    for tok in "${toks[@]}"; do
         [[ "$list" == *" $tok "* ]] || return 1
     done
     return 0
@@ -830,9 +933,10 @@ lcc_evaluate() {
                     ;;
             esac
         fi
+        lcc__clean_to reason "$reason"
         printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' \
             "$name" "$LCC_FS" "$ver" "$LCC_FS" "$path" "$LCC_FS" "$lic" "$LCC_FS" "$src" "$LCC_FS" "$note" "$LCC_FS" \
-            "$status" "$LCC_FS" "$(lcc__clean "$reason")"
+            "$status" "$LCC_FS" "$reason"
     done
 }
 
