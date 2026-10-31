@@ -88,3 +88,13 @@ assert_detects() { # expected id, fixture file
     run lcc_detect_spdx_header "$BATS_TEST_TMPDIR/a.sh"
     [ "$status" -eq 1 ]
 }
+
+@test "MPL-2.0 text that names the GNU licenses as secondary licenses is still MPL-2.0" {
+    assert_detects MPL-2.0 MPL-2.0-secondary.txt
+}
+
+@test "a text that only mentions the GPL far from its start is not a GPL text" {
+    { printf 'Custom license of Acme Corp. All rights reserved.\n\n'; printf 'Some terms apply here.\n%.0s' $(seq 1 40); printf 'This work may also be used under the GNU General Public License version 3.\n'; } >"$BATS_TEST_TMPDIR/LICENSE"
+    run lcc_detect_text "$BATS_TEST_TMPDIR/LICENSE"
+    [ "$status" -eq 1 ]
+}

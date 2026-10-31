@@ -237,32 +237,35 @@ lcc__read_head() {
 
 # lcc_detect_text FILE : print the SPDX id recognised in a license text; exit 1 when unknown.
 lcc_detect_text() {
-    local t suffix id=""
+    local t g suffix id=""
     t="$(lcc__read_head "$1")" || return 1
 
+    # The GNU licenses are recognized by their title or notice at the top of the text; other
+    # licenses (MPL-2.0 names three GNU licenses as secondary licenses) only quote them further down.
+    g="${t:0:800}"
     suffix="-only"
-    [[ "$t" == *"any later version"* ]] && suffix="-or-later"
+    [[ "$g" == *"any later version"* ]] && suffix="-or-later"
 
-    if [[ "$t" == *"gnu affero general public license"* ]]; then
+    if [[ "$t" == *"mozilla public license"* && "$t" == *"version 2.0"* ]]; then
+        id="MPL-2.0"
+    elif [[ "$t" == *"apache license"* && "$t" == *"version 2.0"* ]]; then
+        id="Apache-2.0"
+    elif [[ "$g" == *"gnu affero general public license"* ]]; then
         id="AGPL-3.0${suffix}"
-    elif [[ "$t" == *"gnu lesser general public license"* || "$t" == *"gnu library general public license"* ]]; then
-        if [[ "$t" == *"version 2.1"* ]]; then
+    elif [[ "$g" == *"gnu lesser general public license"* || "$g" == *"gnu library general public license"* ]]; then
+        if [[ "$g" == *"version 2.1"* ]]; then
             id="LGPL-2.1${suffix}"
-        elif [[ "$t" == *"version 3"* ]]; then
+        elif [[ "$g" == *"version 3"* ]]; then
             id="LGPL-3.0${suffix}"
         else
             id="LGPL-2.0${suffix}"
         fi
-    elif [[ "$t" == *"gnu general public license"* ]]; then
-        if [[ "$t" == *"version 3"* ]]; then
+    elif [[ "$g" == *"gnu general public license"* ]]; then
+        if [[ "$g" == *"version 3"* ]]; then
             id="GPL-3.0${suffix}"
-        elif [[ "$t" == *"version 2"* ]]; then
+        elif [[ "$g" == *"version 2"* ]]; then
             id="GPL-2.0${suffix}"
         fi
-    elif [[ "$t" == *"mozilla public license"* && "$t" == *"version 2.0"* ]]; then
-        id="MPL-2.0"
-    elif [[ "$t" == *"apache license"* && "$t" == *"version 2.0"* ]]; then
-        id="Apache-2.0"
     elif [[ "$t" == *"cc0 1.0 universal"* ]]; then
         id="CC0-1.0"
     elif [[ "$t" == *"free and unencumbered software released into the public domain"* ]]; then
@@ -842,6 +845,8 @@ lcc_report_table() {
                 details+=("  review     ${name}: ${reason}")
                 ;;
         esac
+        # names are paths: when too long, keep the distinguishing tail
+        if ((${#name} > 44)); then name="...${name: -41}"; fi
         printf '%-44.44s  %-12.12s  %-44.44s  %s    %s\n' "$name" "$ver" "$lic" "$sym" "$src"
     done
 

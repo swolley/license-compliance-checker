@@ -126,3 +126,12 @@ sample() {
     run "$LCC_ROOT/check-licenses" --path "$P"
     [ "$status" -eq 2 ]
 }
+
+@test "long names keep their distinguishing tail in the table" {
+    a="vendors/deep/nested/third-party/dependencies/library-one/include/alpha"
+    b="vendors/deep/nested/third-party/dependencies/library-one/include/beta"
+    run lcc_report_table < <(erec "$a" 1 p MIT file "" ok r; erec "$b" 1 p MIT file "" ok r)
+    [[ "$output" == *"/include/alpha "* ]]
+    [[ "$output" == *"/include/beta "* ]]
+    [[ "$output" == *"..."* ]]
+}
