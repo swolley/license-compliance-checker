@@ -119,6 +119,106 @@ lcc_load_config() {
     done <"$file"
 }
 
+# Print the flat, unique list of patterns of the arguments, one per line.
+# "@name" arguments expand to the group's patterns (recursively; cycles are cut).
+lcc_expand_patterns() {
+    local -A _seen_groups=() _seen_out=()
+    lcc__expand "$@"
+}
+
+lcc__expand() {
+    local p name
+    local -a sub
+    for p in "$@"; do
+        [[ -n "$p" ]] || continue
+        if [[ "$p" == @* ]]; then
+            name="${p:1}"
+            [[ -z "${_seen_groups[$name]:-}" ]] || continue
+            _seen_groups[$name]=1
+            [[ -n "${LCC_GROUPS[$name]+x}" ]] || continue
+            read -ra sub <<<"${LCC_GROUPS[$name]}"
+            lcc__expand "${sub[@]}"
+        else
+            [[ -z "${_seen_out[$p]:-}" ]] || continue
+            _seen_out[$p]=1
+            printf '%s\n' "$p"
+        fi
+    done
+}
+
+# True when version $1 is >= version $2.
+lcc__version_ge() {
+    [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" == "$2" ]]
+}
+
+# lcc_license_matches LICENSE PATTERN... : exit 0 when LICENSE matches any pattern.
+lcc_license_matches() {
+    local license="$1" pattern prefix family op constraint fam lic_family lic_version
+    local re='^([A-Za-z0-9.-]+)-(>=|<=|>|<)([0-9.]+)$'
+    shift
+    license="${license#"${license%%[![:space:]]*}"}"
+    license="${license%"${license##*[![:space:]]}"}"
+
+    for pattern in "$@"; do
+        if [[ "$pattern" == *-\* ]]; then
+            prefix="${pattern%\*}"
+            [[ "$license" == "$prefix"* ]] && return 0
+            continue
+        fi
+
+        if [[ "$pattern" =~ $re ]]; then
+            family="${BASH_REMATCH[1]}" op="${BASH_REMATCH[2]}" constraint="${BASH_REMATCH[3]}"
+            fam="${LCC_FAMILIES[$license]:-}"
+            [[ -n "$fam" ]] || continue
+            read -r lic_family lic_version <<<"$fam"
+            [[ "$lic_family" == "$family" ]] || continue
+            case "$op" in
+                '>=') lcc__version_ge "$lic_version" "$constraint" && return 0 ;;
+                '<=') lcc__version_ge "$constraint" "$lic_version" && return 0 ;;
+                '>') lcc__version_ge "$lic_version" "$constraint" && ! lcc__version_ge "$constraint" "$lic_version" && return 0 ;;
+                '<') lcc__version_ge "$constraint" "$lic_version" && ! lcc__version_ge "$lic_version" "$constraint" && return 0 ;;
+            esac
+            continue
+        fi
+
+        [[ "$license" == "$pattern" ]] && return 0
+    done
+    return 1
+}
+
+# lcc_is_allowed EXPRESSION PATTERN... : exit 0 when the SPDX expression is allowed.
+lcc_is_allowed() {
+    local expr="$1" part
+    shift
+    expr="${expr#"${expr%%[![:space:]]*}"}"
+    expr="${expr%"${expr##*[![:space:]]}"}"
+    [[ -n "$expr" && "$expr" != "UNKNOWN" ]] || return 1
+
+    lcc_license_matches "$expr" "$@" && return 0
+
+    if [[ "$expr" == *" AND "* ]]; then
+        while IFS= read -r part; do
+            lcc_license_matches "$part" "$@" || return 1
+        done <<<"${expr// AND /$'\n'}"
+        return 0
+    fi
+
+    if [[ "$expr" == *" OR "* ]]; then
+        while IFS= read -r part; do
+            lcc_license_matches "$part" "$@" && return 0
+        done <<<"${expr// OR /$'\n'}"
+    fi
+    return 1
+}
+
+# lcc_patterns_for PROJECT_LICENSE : print the expanded patterns allowed for that license.
+lcc_patterns_for() {
+    local -a raw
+    [[ -n "${LCC_MATRIX[$1]+x}" ]] || return 1
+    read -ra raw <<<"${LCC_MATRIX[$1]}"
+    lcc_expand_patterns "${raw[@]}"
+}
+
 main() {
     lcc_require_env
     lcc_parse_args "$@"
