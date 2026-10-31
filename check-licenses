@@ -73,18 +73,23 @@ lcc_load_defaults() {
         [Apache-1.0]="Apache 1.0" [Apache-1.1]="Apache 1.1" [Apache-2.0]="Apache 2.0"
     )
 
-    LCC_GROUPS[permissive]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-* AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
-    LCC_GROUPS[permissive-no-strong-copyleft]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
-    LCC_GROUPS[proprietary-allowed]="0BSD Apache-* BSD-* CC0-1.0 CC-BY-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
+    LCC_GROUPS[permissive]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-* AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense Zlib"
+    LCC_GROUPS[permissive-no-strong-copyleft]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense Zlib"
+    # a GPL-3.0 or AGPL-3.0 project: GPL-2.0-only is not compatible, GPL-2.0-or-later and GPL/AGPL 3 are
+    LCC_GROUPS[gpl3-compatible]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL->=3.0 GPL-2.0-or-later AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense Zlib"
+    LCC_GROUPS[proprietary-allowed]="0BSD Apache-* BSD-* CC0-1.0 CC-BY-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense Zlib"
 
     local id
     for id in proprietary UNLICENSED; do
         LCC_MATRIX[$id]="@proprietary-allowed"
     done
     for id in MIT Apache-1.0 Apache-1.1 Apache-2.0 BSD-2-Clause BSD-3-Clause BSD-4-Clause \
-        GPL-2.0-or-later GPL-3.0-only GPL-3.0-or-later AGPL-3.0-or-later \
+        GPL-2.0-or-later \
         CC0-1.0 CC-BY-3.0 CC-BY-4.0 CC-BY-SA-3.0 CC-BY-SA-4.0; do
         LCC_MATRIX[$id]="@permissive"
+    done
+    for id in GPL-3.0-only GPL-3.0-or-later AGPL-3.0-or-later; do
+        LCC_MATRIX[$id]="@gpl3-compatible"
     done
     for id in CC-BY-NC-3.0 CC-BY-NC-4.0 CC-BY-NC-SA-3.0 CC-BY-NC-SA-4.0; do
         LCC_MATRIX[$id]="@permissive-no-strong-copyleft"
@@ -300,6 +305,10 @@ lcc__detect_text() {
         id="CC0-1.0"
     elif [[ "$t" == *"free and unencumbered software released into the public domain"* ]]; then
         id="Unlicense"
+    elif [[ "$t" == *"sil open font license"* ]]; then
+        if [[ "$t" == *"version 1.1"* ]]; then id="OFL-1.1"; else id="OFL-1.0"; fi
+    elif [[ "$t" == *"the origin of this software must not be misrepresented"* ]]; then
+        id="Zlib"
     elif [[ "$t" == *"boost software license"* ]]; then
         id="BSL-1.0"
     elif [[ "$t" == *"the php license"* ]]; then
@@ -394,7 +403,7 @@ lcc__is_license_name() {
     local n="${1,,}"
     local re='^(licen[cs]e|copying|unlicense|notice)([-._ ][a-z0-9._+ -]*)?$'
     case "$n" in
-        *.js | *.mjs | *.cjs | *.ts | *.json | *.py | *.pyc | *.php | *.rb | *.java | *.go | *.rs | *.c | *.h | *.cc | *.cpp | *.hpp | *.sh | *.yml | *.yaml | *.xml | *.toml | *.lock | *.map | *.css)
+        *readme* | *.js | *.mjs | *.cjs | *.ts | *.json | *.py | *.pyc | *.php | *.rb | *.java | *.go | *.rs | *.c | *.h | *.cc | *.cpp | *.hpp | *.sh | *.yml | *.yaml | *.xml | *.toml | *.lock | *.map | *.css)
             return 1
             ;;
     esac
@@ -923,10 +932,11 @@ lcc_evaluate() {
             done
             case "$rc" in
                 0)
-                    if [[ -n "$note" ]]; then
+                    # several license files are informational: every one of their licenses is allowed
+                    if [[ -n "$note" && "$note" != "multiple license files" ]]; then
                         status="review" reason="$note"
                     else
-                        status="ok" reason="allowed for ${LCC_PROJECT_LICENSE}"
+                        status="ok" reason="allowed for ${LCC_PROJECT_LICENSE}${note:+ ($note)}"
                     fi
                     ;;
                 2) status="review" reason="license expression too complex to evaluate: ${lic}" ;;

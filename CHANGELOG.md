@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Under a GPL-3.0 or AGPL-3.0 project a `GPL-2.0-only` dependency is now forbidden (new group `gpl3-compatible`); `GPL-2.0-or-later` and GPL/AGPL 3 stay allowed.
+- The SIL OFL 1.1 text is recognized as `OFL-1.1` and no longer read as MIT (its permission clause starts like the MIT one).
+- `README` notes next to the license files (for example `COPYING.README`) are not license files.
+
+### Changed
+
+- Several license files in one directory no longer force a review when all their licenses are allowed.
+
+### Added
+
+- The zlib license is recognized (`Zlib`) and allowed like the other permissive licenses.
+
 ## [2.0.0] - 2026-10-31
 
 ### Changed

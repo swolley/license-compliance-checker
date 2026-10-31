@@ -143,3 +143,15 @@ assert_detects() { # expected id, fixture file
         [ "$output" = "$id" ] || { echo "$id detected as $output"; false; }
     done
 }
+
+@test "zlib license is recognized" {
+    run lcc_detect_text "$TEXTS/full/Zlib.txt"
+    [ "$status" -eq 0 ]
+    [ "$output" = "Zlib" ]
+}
+
+@test "SIL OFL 1.1 is recognized and not read as MIT" {
+    run lcc_detect_text "$TEXTS/full/OFL-1.1.txt"
+    [ "$status" -eq 0 ]
+    [ "$output" = "OFL-1.1" ]
+}
