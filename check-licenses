@@ -54,6 +54,71 @@ lcc_parse_args() {
     done
 }
 
+# Built-in matrix. Keys of LCC_MATRIX are project licenses; values are space-separated
+# patterns (exact SPDX id, "BSD-*", "GPL->=3.0") and @group references.
+lcc_load_defaults() {
+    LCC_PROJECT_LICENSE=""
+    declare -ga LCC_EXCLUDE=(.git build dist node_modules/.cache)
+    declare -ga LCC_INCLUDE=()
+    declare -gA LCC_ALLOW=() LCC_GROUPS=() LCC_MATRIX=() LCC_FAMILIES=()
+
+    LCC_FAMILIES=(
+        [GPL-2.0-only]="GPL 2.0" [GPL-2.0-or-later]="GPL 2.0"
+        [GPL-3.0-only]="GPL 3.0" [GPL-3.0-or-later]="GPL 3.0"
+        [AGPL-3.0-or-later]="AGPL 3.0"
+        [Apache-1.0]="Apache 1.0" [Apache-1.1]="Apache 1.1" [Apache-2.0]="Apache 2.0"
+    )
+
+    LCC_GROUPS[permissive]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-* AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL"
+    LCC_GROUPS[permissive-no-strong-copyleft]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* ISC LGPL-* MIT MPL-2.0 WTFPL"
+    LCC_GROUPS[proprietary-allowed]="0BSD Apache-* BSD-* CC0-1.0 CC-BY-* ISC LGPL-* MIT MPL-2.0 WTFPL"
+
+    local id
+    for id in proprietary UNLICENSED; do
+        LCC_MATRIX[$id]="@proprietary-allowed"
+    done
+    for id in MIT Apache-1.0 Apache-1.1 Apache-2.0 BSD-2-Clause BSD-3-Clause BSD-4-Clause \
+        GPL-2.0-or-later GPL-3.0-only GPL-3.0-or-later AGPL-3.0-or-later \
+        CC0-1.0 CC-BY-3.0 CC-BY-4.0 CC-BY-SA-3.0 CC-BY-SA-4.0; do
+        LCC_MATRIX[$id]="@permissive"
+    done
+    for id in CC-BY-NC-3.0 CC-BY-NC-4.0 CC-BY-NC-SA-3.0 CC-BY-NC-SA-4.0; do
+        LCC_MATRIX[$id]="@permissive-no-strong-copyleft"
+    done
+    LCC_MATRIX[GPL-2.0-only]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-<=2.0 ISC LGPL-* MIT MPL-2.0 WTFPL"
+}
+
+# Read a project config file (one directive per line, "#" starts a comment).
+lcc_load_config() {
+    local file="$1" line n=0 directive rest name values
+    [[ -r "$file" ]] || lcc_die "cannot read config: $file"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        line="${line%%#*}"
+        directive="" rest=""
+        read -r directive rest <<<"$line" || true
+        [[ -n "$directive" ]] || continue
+        [[ -n "$rest" ]] || lcc_die "$file:$n: directive '$directive' needs a value"
+
+        case "$directive" in
+            project-license) LCC_PROJECT_LICENSE="$rest" ;;
+            exclude) LCC_EXCLUDE+=("$rest") ;;
+            include) LCC_INCLUDE+=("$rest") ;;
+            allow | group | matrix)
+                read -r name values <<<"$rest"
+                [[ -n "$values" ]] || lcc_die "$file:$n: '$directive $name' needs at least one value"
+                case "$directive" in
+                    allow) LCC_ALLOW[$name]="$values" ;;
+                    group) LCC_GROUPS[$name]="$values" ;;
+                    matrix) LCC_MATRIX[$name]="$values" ;;
+                esac
+                ;;
+            *) lcc_die "$file:$n: unknown directive '$directive'" ;;
+        esac
+    done <"$file"
+}
+
 main() {
     lcc_require_env
     lcc_parse_args "$@"
