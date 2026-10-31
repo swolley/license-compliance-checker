@@ -1,0 +1,2 @@
+# The checker checks itself in CI (there are no dependencies, so this is a smoke test).
+project-license MIT

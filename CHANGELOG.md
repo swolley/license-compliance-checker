@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-31
+
+### Changed
+
+- **Breaking:** rewritten as a single bash script (`check-licenses`, bash 4+ and `jq`); PHP and Composer are no longer needed and the Composer package is removed (1.x stays available from its tags).
+- **Breaking:** the config is `.license-compliance` (one directive per line: `project-license`, `exclude`, `include`, `allow`, `group`, `matrix`); `license-compliance.php` is no longer read. See "Migrating from 1.x" in the README.
+- The built-in matrix is the 1.x one, plus `Unlicense`.
+- npm licenses are read from the `package.json` files in `node_modules` (no more `npx license-checker`).
+- The report is a table with a status per entry (`ok`, `forbidden`, `review`) and the reasons; `--json` prints it as JSON.
+
 ### Added
 
-- Project license fallback to the `LICENSES/` directory when `composer.json`, `package.json` and `LICENSE` give no match. Files named after an SPDX id known to the license matrix (e.g. `MIT.txt`) count as that license, other files are detected from their content. With several licenses, each dependency must be compatible with all of them.
-
-### Fixed
-
-- `LICENSE` detection no longer reads words such as "permitted" as MIT.
+- Language-agnostic discovery: license files, `LICENSES/` (REUSE), SPDX headers, `.gitmodules` entries and the manifests `package.json`, `composer.lock`, `Cargo.toml`, `pyproject.toml`, `pom.xml`, anywhere in the tree (default exclusions `.git`, `build`, `dist`, `node_modules/.cache`).
+- `review` status for licenses that are not recognized, for manifest/text disagreements and for expressions too complex to evaluate; `--strict` makes it fail.
+- `allow` directive for per-dependency exceptions, `--project-license`, `--config`, `--json`, `--strict`.
+- License text detection by characteristic phrases (LGPL and AGPL before GPL, BSD-2/3 by the no-endorsement clause, ...).
+- SPDX expressions: `AND` binds tighter than `OR`, one pair of outer parentheses is accepted.
 
 ## [1.0.0] - 2025-02-27
 

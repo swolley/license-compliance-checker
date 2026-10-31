@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq shellcheck
+
+      - name: Install tools (macOS, bash 4+)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash bats-core jq shellcheck
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Lint
+        run: shellcheck -x check-licenses
+
+      - name: Test
+        run: bats tests/bats

@@ -467,7 +467,8 @@ lcc__discover_files() {
 
     while IFS= read -r -d '' file && IFS= read -r rest; do
         n="${rest%%:*}"
-        [[ "$n" =~ ^[0-9]+$ ]] && ((n <= 30)) || continue
+        [[ "$n" =~ ^[0-9]+$ ]] || continue
+        ((n <= 30)) || continue
         rel="${file#"$root"/}"
         [[ "$rel" != *$'\n'* && "$rel" != *"$LCC_FS"* && "$rel" == */* ]] || continue
         hit=0
@@ -492,6 +493,7 @@ lcc__discover_files() {
 }
 
 # Common jq tail: sanitize the fields and join them into a record.
+# shellcheck disable=SC2016  # jq code, not shell: $fs is a jq variable
 LCC_JQ_RECORD='map(tostring | gsub("[\t\n\u001f]"; " ")) | join($fs)'
 
 # lcc_read_package_json FILE... : one manifest record per package.json (one jq run for all files).
@@ -687,7 +689,7 @@ lcc_discover() {
 # lcc_detect_project_license ROOT : print the project license; exit 1 when it cannot be told.
 # Order: --project-license, config, package.json / composer.json, root LICENSE file, LICENSES/ directory.
 lcc_detect_project_license() {
-    local root="$1" lic f id
+    local root="$1" lic f id n
     local -a ids=()
 
     if [[ -n "${LCC_PROJECT_LICENSE_OPT:-}" ]]; then
@@ -729,8 +731,11 @@ lcc_detect_project_license() {
             [[ -f "$f" ]] || continue
             if id="$(lcc_license_from_filename "$f")"; then ids+=("$id"); fi
         done
-        if ((${#ids[@]} == 1)); then
-            printf '%s\n' "${ids[0]}"
+        if ((${#ids[@]})); then
+            mapfile -t ids < <(printf '%s\n' "${ids[@]}" | LC_ALL=C sort -u)
+            lic="${ids[0]}"
+            for ((n = 1; n < ${#ids[@]}; n++)); do lic+=" AND ${ids[n]}"; done
+            printf '%s\n' "$lic"
             return 0
         fi
     fi
@@ -775,11 +780,15 @@ lcc__allow_exception() {
 # lcc_evaluate : read records on stdin (project license in LCC_PROJECT_LICENSE), write them with two more
 # fields: status (ok, forbidden, review) and reason.
 lcc_evaluate() {
-    local name ver path lic src note status reason rc w
-    local -a patterns=()
-    [[ -n "${LCC_MATRIX[$LCC_PROJECT_LICENSE]+x}" ]] ||
-        lcc_die "no matrix row for the project license '${LCC_PROJECT_LICENSE}'; add a 'matrix ${LCC_PROJECT_LICENSE} ...' line to .license-compliance"
-    mapfile -t patterns < <(lcc_patterns_for "$LCC_PROJECT_LICENSE")
+    local name ver path lic src note status reason rc r w i
+    local -a projs=() pat_str=() patterns=()
+    # "A AND B" as project license (several licenses): a dependency must be allowed by each of them.
+    mapfile -t projs < <(printf '%s\n' "${LCC_PROJECT_LICENSE// AND /$'\n'}")
+    for i in "${!projs[@]}"; do
+        [[ -n "${LCC_MATRIX[${projs[i]}]+x}" ]] ||
+            lcc_die "no matrix row for the project license '${projs[i]}'; add a 'matrix ${projs[i]} ...' line to .license-compliance"
+        pat_str[i]="$(lcc_patterns_for "${projs[i]}" | tr '\n' ' ')"
+    done
 
     local -a LCC_KNOWN_PATTERNS=()
     for w in ${LCC_GROUPS[@]+"${LCC_GROUPS[@]}"} ${LCC_MATRIX[@]+"${LCC_MATRIX[@]}"}; do
@@ -794,7 +803,13 @@ lcc_evaluate() {
             status="review" reason="${note:-license not found or not recognized}"
         else
             rc=0
-            lcc_is_allowed "$lic" "${patterns[@]}" || rc=$?
+            for i in "${!projs[@]}"; do
+                read -ra patterns <<<"${pat_str[i]}"
+                r=0
+                lcc_is_allowed "$lic" "${patterns[@]}" || r=$?
+                # not allowed (1) beats undecidable (2) beats allowed (0)
+                if ((r == 1)); then rc=1; elif ((r == 2 && rc == 0)); then rc=2; fi
+            done
             case "$rc" in
                 0)
                     if [[ -n "$note" ]]; then

@@ -59,12 +59,26 @@ evaluate_one() { # project license, then mkrec args
     [ "$output" = "MPL-2.0" ]
 }
 
-@test "LICENSES directory with several licenses is not decisive" {
+@test "LICENSES directory with several licenses gives them joined with AND" {
     mkdir -p "$P/LICENSES"
     cp "$TEXTS/MIT.txt" "$P/LICENSES/MIT.txt"
     cp "$TEXTS/ISC.txt" "$P/LICENSES/ISC.txt"
     run lcc_detect_project_license "$P"
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 0 ]
+    [ "$output" = "ISC AND MIT" ]
+}
+
+@test "with several project licenses a dependency must be allowed by all of them" {
+    run evaluate_one "MIT AND UNLICENSED" dep 1.0 dep GPL-3.0-only manifest ""
+    [ "$(field "$output" 7)" = "forbidden" ]
+    run evaluate_one "MIT AND UNLICENSED" dep 1.0 dep ISC manifest ""
+    [ "$(field "$output" 7)" = "ok" ]
+}
+
+@test "a project license of a multi-license set without a matrix row exits 2" {
+    run evaluate_one "MIT AND Nonexistent-1.0" dep 1.0 dep ISC manifest ""
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Nonexistent-1.0"* ]]
 }
 
 @test "no detectable project license exits 2 with the documented message" {
