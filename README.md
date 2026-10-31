@@ -70,6 +70,7 @@ matrix           GPL-3.0-or-later  @permissive GPL->=3.0
 ```
 
 `matrix` maps a project license to the patterns allowed for its dependencies. A pattern is an exact SPDX id (`MIT`), a wildcard (`BSD-*`), a version constraint (`GPL->=3.0`, `Apache-<=1.1`) or a group (`@permissive`, groups can contain groups). SPDX expressions in dependencies are evaluated with `AND` and `OR` (`AND` binds tighter); a single pair of outer parentheses is accepted, nested ones make the entry `review`.
+`allow NAME ...` matches the name shown in the report: the package name for entries read from a manifest (`acme/lib`, `@scope/pkg`) and the directory path for entries found from license files, submodules and headers (`vendors/mystery`).
 `group` and `matrix` lines replace the built-in entry of the same name or add a new one. The built-in matrix is the one of version 1 (groups `permissive`, `permissive-no-strong-copyleft`, `proprietary-allowed`) plus `Unlicense`; see the top of the script.
 
 ### Migrating from 1.x

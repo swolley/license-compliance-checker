@@ -130,3 +130,16 @@ assert_detects() { # expected id, fixture file
     run lcc_license_from_filename "/p/LICENSES/readme.txt"
     [ "$status" -eq 1 ]
 }
+
+@test "detects BSD-4-Clause by the advertising clause even though it has the no-endorsement clause too" {
+    assert_detects BSD-4-Clause BSD-4-Clause.txt
+}
+
+@test "look-alike licenses are not read as MIT or BSD" {
+    local id
+    for id in BSL-1.0 PHP-3.01 ZPL-2.1; do
+        run lcc_detect_text "$TEXTS/full/$id.txt"
+        [ "$status" -eq 0 ]
+        [ "$output" = "$id" ] || { echo "$id detected as $output"; false; }
+    done
+}

@@ -6,7 +6,3 @@ load_lcc() {
     # shellcheck source=/dev/null
     LCC_SOURCE_ONLY=1 source "$LCC_ROOT/check-licenses"
 }
-
-make_project() {
-    mkdir -p "$1"
-}

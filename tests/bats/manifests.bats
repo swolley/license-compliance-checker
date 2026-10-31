@@ -187,3 +187,37 @@ JSON
     [ "$(wc -l <<<"$output")" -eq 500 ]
     [ "$elapsed" -lt 20 ]
 }
+
+@test "two composer.lock files with the same package keep one record each" {
+    printf '{"packages":[{"name":"acme/lib","version":"1.0.0","license":["MIT"]}]}\n' >"$P/composer.lock"
+    mkdir -p "$P/tools"
+    printf '{"packages":[{"name":"acme/lib","version":"2.0.0","license":["GPL-3.0-only"]}]}\n' >"$P/tools/composer.lock"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 2 ]
+    [[ "$output" == *"${LCC_FS}MIT${LCC_FS}"* ]]
+    [[ "$output" == *"${LCC_FS}GPL-3.0-only${LCC_FS}"* ]]
+}
+
+@test "a nested composer.lock merges with the vendor directory next to it" {
+    mkdir -p "$P/tools/vendor/acme/lib"
+    printf '{"packages":[{"name":"acme/lib","version":"2.0.0","license":["MIT"]}]}\n' >"$P/tools/composer.lock"
+    cp "$TEXTS/MIT.txt" "$P/tools/vendor/acme/lib/LICENSE"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 1 ]
+    [ "$(rec "$output" 5)" = "manifest+file" ]
+}
+
+@test "package.json 'SEE LICENSE IN' defers to the recognized license text" {
+    pkg node_modules/dep '{"name":"dep","version":"1.0.0","license":"SEE LICENSE IN LICENSE.md"}'
+    cp "$TEXTS/MIT.txt" "$P/node_modules/dep/LICENSE"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 1 ]
+    [ "$(rec "$output" 4)" = "MIT" ]
+    [ "$(rec "$output" 6)" = "" ]
+}
+
+@test "package.json 'SEE LICENSE IN' without a license file gives an empty license" {
+    pkg node_modules/dep '{"name":"dep","version":"1.0.0","license":"SEE LICENSE IN LICENSE.md"}'
+    run lcc_discover "$P"
+    [ "$(rec "$output" 4)" = "" ]
+}
