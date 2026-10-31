@@ -73,9 +73,9 @@ lcc_load_defaults() {
         [Apache-1.0]="Apache 1.0" [Apache-1.1]="Apache 1.1" [Apache-2.0]="Apache 2.0"
     )
 
-    LCC_GROUPS[permissive]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-* AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL"
-    LCC_GROUPS[permissive-no-strong-copyleft]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* ISC LGPL-* MIT MPL-2.0 WTFPL"
-    LCC_GROUPS[proprietary-allowed]="0BSD Apache-* BSD-* CC0-1.0 CC-BY-* ISC LGPL-* MIT MPL-2.0 WTFPL"
+    LCC_GROUPS[permissive]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* CC-BY-SA-* GPL-* AGPL-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
+    LCC_GROUPS[permissive-no-strong-copyleft]="0BSD Apache-* BSD-* CC0-* CC-BY-* CC-BY-NC-* CC-BY-NC-SA-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
+    LCC_GROUPS[proprietary-allowed]="0BSD Apache-* BSD-* CC0-1.0 CC-BY-* ISC LGPL-* MIT MPL-2.0 WTFPL Unlicense"
 
     local id
     for id in proprietary UNLICENSED; do
@@ -679,6 +679,141 @@ lcc_discover() {
         lcc__discover_files "$root"
         (lcc__discover_manifests "$root")
     } | lcc_merge_records | LC_ALL=C sort
+}
+
+# lcc_detect_project_license ROOT : print the project license; exit 1 when it cannot be told.
+# Order: --project-license, config, package.json / composer.json, root LICENSE file, LICENSES/ directory.
+lcc_detect_project_license() {
+    local root="$1" lic f id
+    local -a ids=()
+
+    if [[ -n "${LCC_PROJECT_LICENSE_OPT:-}" ]]; then
+        printf '%s\n' "$LCC_PROJECT_LICENSE_OPT"
+        return 0
+    fi
+    if [[ -n "${LCC_PROJECT_LICENSE:-}" ]]; then
+        printf '%s\n' "$LCC_PROJECT_LICENSE"
+        return 0
+    fi
+
+    if [[ -r "$root/package.json" ]]; then
+        lic="$(jq -r 'if (.license | type) == "string" then .license elif (.license | type) == "object" then (.license.type // "") else "" end' "$root/package.json" 2>/dev/null)" || lic=""
+        if [[ -n "$lic" && "$lic" != SEE* ]]; then
+            printf '%s\n' "$lic"
+            return 0
+        fi
+    fi
+    if [[ -r "$root/composer.json" ]]; then
+        lic="$(jq -r 'if (.license | type) == "string" then .license elif (.license | type) == "array" and (.license | length) == 1 then .license[0] else "" end' "$root/composer.json" 2>/dev/null)" || lic=""
+        if [[ -n "$lic" ]]; then
+            printf '%s\n' "$lic"
+            return 0
+        fi
+    fi
+
+    for f in "$root"/*; do
+        [[ -f "$f" ]] || continue
+        lcc__is_license_name "${f##*/}" || continue
+        [[ "${f##*/}" != [Nn][Oo][Tt][Ii][Cc][Ee]* ]] || continue
+        if id="$(lcc_detect_text "$f")"; then
+            printf '%s\n' "$id"
+            return 0
+        fi
+    done
+
+    if [[ -d "$root/LICENSES" ]]; then
+        for f in "$root"/LICENSES/*; do
+            [[ -f "$f" ]] || continue
+            if id="$(lcc_license_from_filename "$f")"; then ids+=("$id"); fi
+        done
+        if ((${#ids[@]} == 1)); then
+            printf '%s\n' "${ids[0]}"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# lcc_resolve_project_license ROOT : like lcc_detect_project_license, but exits 2 with a message when undetectable.
+lcc_resolve_project_license() {
+    lcc_detect_project_license "$1" ||
+        lcc_die "Could not detect the project license. Set --project-license, 'project-license' in .license-compliance, 'license' in package.json or composer.json, or add a standard LICENSE file or a LICENSES/ directory."
+}
+
+# True when every license id of an expression is in LCC_KNOWN_PATTERNS (or is a matrix/family key).
+lcc__all_known() {
+    local tok
+    local s="${1//[()]/ }"
+    s="${s// AND / }"
+    s="${s// OR / }"
+    for tok in $s; do
+        [[ -n "${LCC_MATRIX[$tok]+x}" || -n "${LCC_FAMILIES[$tok]+x}" ]] && continue
+        lcc_license_matches "$tok" "${LCC_KNOWN_PATTERNS[@]}" || return 1
+    done
+    return 0
+}
+
+# True when the dependency has an allow line covering every license id of the expression.
+lcc__allow_exception() {
+    local name="$1" lic="$2" tok list
+    [[ -n "${LCC_ALLOW[$name]+x}" ]] || return 1
+    list=" ${LCC_ALLOW[$name]} "
+    [[ "$list" != *" * "* ]] || return 0
+    local s="${lic//[()]/ }"
+    s="${s// AND / }"
+    s="${s// OR / }"
+    [[ -n "${s// /}" ]] || return 1
+    for tok in $s; do
+        [[ "$list" == *" $tok "* ]] || return 1
+    done
+    return 0
+}
+
+# lcc_evaluate : read records on stdin (project license in LCC_PROJECT_LICENSE), write them with two more
+# fields: status (ok, forbidden, review) and reason.
+lcc_evaluate() {
+    local name ver path lic src note status reason rc w
+    local -a patterns=()
+    [[ -n "${LCC_MATRIX[$LCC_PROJECT_LICENSE]+x}" ]] ||
+        lcc_die "no matrix row for the project license '${LCC_PROJECT_LICENSE}'; add a 'matrix ${LCC_PROJECT_LICENSE} ...' line to .license-compliance"
+    mapfile -t patterns < <(lcc_patterns_for "$LCC_PROJECT_LICENSE")
+
+    local -a LCC_KNOWN_PATTERNS=()
+    for w in ${LCC_GROUPS[@]+"${LCC_GROUPS[@]}"} ${LCC_MATRIX[@]+"${LCC_MATRIX[@]}"}; do
+        [[ "$w" == @* || "$w" == *[\<\>]* ]] || LCC_KNOWN_PATTERNS+=("$w")
+    done
+
+    while IFS=$LCC_FS read -r name ver path lic src note; do
+        [[ -n "$name$path" ]] || continue
+        if lcc__allow_exception "$name" "$lic"; then
+            status="ok" reason="allowed by config"
+        elif [[ -z "${lic// /}" || "$lic" == "UNKNOWN" ]]; then
+            status="review" reason="${note:-license not found or not recognized}"
+        else
+            rc=0
+            lcc_is_allowed "$lic" "${patterns[@]}" || rc=$?
+            case "$rc" in
+                0)
+                    if [[ -n "$note" ]]; then
+                        status="review" reason="$note"
+                    else
+                        status="ok" reason="allowed for ${LCC_PROJECT_LICENSE}"
+                    fi
+                    ;;
+                2) status="review" reason="license expression too complex to evaluate: ${lic}" ;;
+                *)
+                    if lcc__all_known "$lic"; then
+                        status="forbidden" reason="${lic} is not allowed for a ${LCC_PROJECT_LICENSE} project"
+                    else
+                        status="review" reason="unrecognized license: ${lic}"
+                    fi
+                    ;;
+            esac
+        fi
+        printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' \
+            "$name" "$LCC_FS" "$ver" "$LCC_FS" "$path" "$LCC_FS" "$lic" "$LCC_FS" "$src" "$LCC_FS" "$note" "$LCC_FS" \
+            "$status" "$LCC_FS" "$(lcc__clean "$reason")"
+    done
 }
 
 main() {
