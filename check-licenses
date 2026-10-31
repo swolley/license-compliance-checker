@@ -310,7 +310,9 @@ lcc_detect_spdx_header() {
     line="$(head -n 30 -- "$1" 2>/dev/null | head -c 8192 | grep -I -m 1 'SPDX-License-Identifier:')" || return 1
     expr="${line#*SPDX-License-Identifier:}"
     expr="$(printf '%s' "$expr" | sed -E 's/[[:space:]]*(\*\/|-->|#\}|\}\})[[:space:]]*$//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
-    [[ -n "$expr" ]] || return 1
+    # ids joined by AND / OR / WITH: anything else is prose that merely quotes the tag
+    local re='^[(]*[A-Za-z0-9.+-]+([)]* (AND|OR|WITH) [(]*[A-Za-z0-9.+-]+)*[)]*$'
+    [[ "$expr" =~ $re ]] || return 1
     printf '%s\n' "$expr"
 }
 

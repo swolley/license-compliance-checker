@@ -98,3 +98,19 @@ assert_detects() { # expected id, fixture file
     run lcc_detect_text "$BATS_TEST_TMPDIR/LICENSE"
     [ "$status" -eq 1 ]
 }
+
+@test "the SPDX tag quoted in prose is not a header" {
+    printf 'The `SPDX-License-Identifier:` tag in the first 30 lines of each file is read.\n' >"$BATS_TEST_TMPDIR/doc.md"
+    run lcc_detect_spdx_header "$BATS_TEST_TMPDIR/doc.md"
+    [ "$status" -eq 1 ]
+    printf '# SPDX-License-Identifier: in the first lines of the file\n' >"$BATS_TEST_TMPDIR/doc2.md"
+    run lcc_detect_spdx_header "$BATS_TEST_TMPDIR/doc2.md"
+    [ "$status" -eq 1 ]
+}
+
+@test "SPDX header with WITH exception and parentheses is accepted" {
+    printf '// SPDX-License-Identifier: (GPL-2.0-only WITH Classpath-exception-2.0 OR MIT)\n' >"$BATS_TEST_TMPDIR/a.java"
+    run lcc_detect_spdx_header "$BATS_TEST_TMPDIR/a.java"
+    [ "$status" -eq 0 ]
+    [ "$output" = "(GPL-2.0-only WITH Classpath-exception-2.0 OR MIT)" ]
+}
