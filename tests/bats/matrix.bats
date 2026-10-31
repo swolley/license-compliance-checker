@@ -107,3 +107,18 @@ refute_allowed() { run lcc_is_allowed "$@"; [ "$status" -eq 1 ]; }
     [[ "$output" == *"BSD-*"* ]]
     [[ "$output" != *"BSD-fake"* ]]
 }
+
+@test "outer parentheses are stripped" {
+    assert_allowed "(MIT OR Foo)" MIT
+    refute_allowed "(Foo OR Bar)" MIT
+}
+
+@test "AND binds tighter than OR" {
+    assert_allowed "Foo OR MIT AND ISC" MIT ISC
+    refute_allowed "Foo OR MIT AND Bar" MIT ISC
+}
+
+@test "nested parentheses are undecidable and exit 2" {
+    run lcc_is_allowed "(MIT OR Foo) AND ISC" MIT ISC
+    [ "$status" -eq 2 ]
+}

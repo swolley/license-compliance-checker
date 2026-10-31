@@ -198,20 +198,25 @@ lcc_is_allowed() {
     expr="${expr%"${expr##*[![:space:]]}"}"
     [[ -n "$expr" && "$expr" != "UNKNOWN" ]] || return 1
 
+    # One pair of outer parentheses is dropped; anything nested cannot be evaluated (exit 2).
+    if [[ "$expr" == \(*\) && "${expr:1:${#expr}-2}" != *[\(\)]* ]]; then
+        expr="${expr:1:${#expr}-2}"
+        expr="${expr#"${expr%%[![:space:]]*}"}"
+        expr="${expr%"${expr##*[![:space:]]}"}"
+    fi
+    [[ "$expr" != *[\(\)]* ]] || return 2
+
     lcc_license_matches "$expr" "$@" && return 0
 
-    if [[ "$expr" == *" AND "* ]]; then
+    # AND binds tighter than OR: the expression is allowed when one OR branch has all its AND parts allowed.
+    local branch ok
+    while IFS= read -r branch; do
+        ok=1
         while IFS= read -r part; do
-            lcc_license_matches "$part" "$@" || return 1
-        done <<<"${expr// AND /$'\n'}"
-        return 0
-    fi
-
-    if [[ "$expr" == *" OR "* ]]; then
-        while IFS= read -r part; do
-            lcc_license_matches "$part" "$@" && return 0
-        done <<<"${expr// OR /$'\n'}"
-    fi
+            lcc_license_matches "$part" "$@" || { ok=0; break; }
+        done <<<"${branch// AND /$'\n'}"
+        ((ok)) && return 0
+    done <<<"${expr// OR /$'\n'}"
     return 1
 }
 
@@ -335,9 +340,17 @@ lcc__is_license_name() {
     [[ "$n" =~ $re ]]
 }
 
-# Print (NUL-separated) the candidate license files under ROOT. Symlinked directories are not followed.
+# Print (NUL-separated) the candidate license files under ROOT.
 lcc__find_license_files() {
+    lcc__find "$1" \( -type f -o -type l \) \
+        \( -iname 'licen[cs]e*' -o -iname 'copying*' -o -iname 'unlicense*' -o -iname 'notice*' -o -path '*/LICENSES/*' \)
+}
+
+# lcc__find ROOT PREDICATE... : print (NUL-separated) what matches the predicates under ROOT,
+# skipping the effective exclusions. Symlinked directories are not followed.
+lcc__find() {
     local root="$1" e sep=0
+    shift
     local -a prune=()
     while IFS= read -r e; do
         ((sep)) && prune+=(-o)
@@ -350,17 +363,15 @@ lcc__find_license_files() {
     done < <(lcc__effective_excludes)
 
     if ((${#prune[@]})); then
-        find -P "$root" -mindepth 1 -type d \( "${prune[@]}" \) -prune -o \
-            \( -type f -o -type l \) \( -iname 'licen[cs]e*' -o -iname 'copying*' -o -iname 'unlicense*' -o -iname 'notice*' -o -path '*/LICENSES/*' \) -print0
+        find -P "$root" -mindepth 1 -type d \( "${prune[@]}" \) -prune -o \( "$@" \) -print0
     else
-        find -P "$root" -mindepth 1 \
-            \( -type f -o -type l \) \( -iname 'licen[cs]e*' -o -iname 'copying*' -o -iname 'unlicense*' -o -iname 'notice*' -o -path '*/LICENSES/*' \) -print0
+        find -P "$root" -mindepth 1 \( "$@" \) -print0
     fi
 }
 
-# lcc_discover ROOT : print one record per dependency-like directory:
+# lcc__discover_files ROOT : one record per directory with license files, per submodule and per SPDX header
 #   name FS version FS path FS license FS source FS note     (source: file, header, submodule)
-lcc_discover() {
+lcc__discover_files() {
     local root file rel dir d base f id e sp key expr hit n rest
     root="$(cd -- "$1" && pwd -P)" || return 1
 
@@ -475,6 +486,199 @@ lcc_discover() {
 
     ((${#out[@]})) || return 0
     printf '%s\n' "${out[@]}" | LC_ALL=C sort
+}
+
+# Common jq tail: sanitize the fields and join them into a record.
+LCC_JQ_RECORD='map(tostring | gsub("[\t\n\u001f]"; " ")) | join($fs)'
+
+# lcc_read_package_json FILE... : one manifest record per package.json (one jq run for all files).
+lcc_read_package_json() {
+    (($# > 0)) || return 0
+    local out f prog
+    prog="$(lcc__package_program)"
+    # jq stops at the first unparsable file, so a failed batch is redone file by file.
+    if out="$(printf '%s\0' "$@" | xargs -0 -r jq -r --arg fs "$LCC_FS" "$prog" 2>/dev/null)"; then
+        [[ -z "$out" ]] || printf '%s\n' "$out"
+    else
+        for f in "$@"; do jq -r --arg fs "$LCC_FS" "$prog" "$f" 2>/dev/null || true; done
+    fi
+}
+
+# lcc__package_program : the jq program behind lcc_read_package_json.
+lcc__package_program() {
+    printf '%s' '
+        def lic:
+            if (.license | type) == "string" then .license
+            elif (.license | type) == "object" then (.license.type // "")
+            elif (.licenses | type) == "array" then
+                ([.licenses[] | if type == "string" then . else (.type // "") end] | map(select(. != "")) | join(" OR "))
+            else "" end;
+        [ (.name // (input_filename | sub("/?package\\.json$"; ""))),
+          (.version // ""),
+          input_filename,
+          (lic | gsub("^\\((?<x>.*)\\)$"; .x)),
+          "manifest",
+          "" ]
+        | '"$LCC_JQ_RECORD"
+}
+
+# lcc_read_composer_lock FILE : one manifest record per locked package (packages and packages-dev).
+lcc_read_composer_lock() {
+    jq -r --arg fs "$LCC_FS" --arg path "$1" '
+        ((.packages // []) + (."packages-dev" // []))[]
+        | [ .name, (.version // ""), $path,
+            ((.license // []) | if type == "array" then join(" OR ") else . end),
+            "manifest", "" ]
+        | '"$LCC_JQ_RECORD" "$1" 2>/dev/null || true
+}
+
+# Map a free-text license name (pom.xml) to an SPDX id when it is a well-known one.
+lcc__map_license_name() {
+    local n="${1,,}"
+    case "$n" in
+        *apache*2.0* | *apache*"version 2") printf 'Apache-2.0\n' ;;
+        *"mit license"* | "the mit"* | mit) printf 'MIT\n' ;;
+        *bsd*3*clause* | *"new bsd"* | *"revised bsd"*) printf 'BSD-3-Clause\n' ;;
+        *bsd*2*clause* | *"simplified bsd"*) printf 'BSD-2-Clause\n' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+# lcc_read_flat_manifest FILE : manifest record from Cargo.toml, pyproject.toml or pom.xml (license field only).
+lcc_read_flat_manifest() {
+    local file="$1" name="" version="" license=""
+    case "${file##*/}" in
+        Cargo.toml | pyproject.toml)
+            name="$(sed -n -E 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$file" | head -n 1)"
+            version="$(sed -n -E 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$file" | head -n 1)"
+            license="$(sed -n -E \
+                -e 's/^[[:space:]]*license[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' \
+                -e 's/^[[:space:]]*license[[:space:]]*=[[:space:]]*\{[^}]*text[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' \
+                "$file" | head -n 1)"
+            ;;
+        pom.xml)
+            if grep -q '<licenses>' "$file"; then
+                license="$(tr '\n' ' ' <"$file" | sed -E 's/.*<licenses>//; s/<\/license>.*//; s/.*<name>//; s/<\/name>.*//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
+                [[ -z "$license" ]] || license="$(lcc__map_license_name "$license")"
+            fi
+            ;;
+        *) return 0 ;;
+    esac
+    [[ -n "$name" ]] || name="${file%/*}"
+    [[ "$license" != \(*\) ]] || license="${license:1:${#license}-2}"
+    printf '%s%s%s%s%s%s%s%s%s%s\n' \
+        "$(lcc__clean "$name")" "$LCC_FS" "$(lcc__clean "$version")" "$LCC_FS" "$(lcc__clean "$file")" "$LCC_FS" \
+        "$(lcc__clean "$license")" "$LCC_FS" "manifest" "$LCC_FS"
+}
+
+# lcc__discover_manifests ROOT : manifest records of every package manifest below ROOT.
+# Root-level package.json, Cargo.toml, pyproject.toml and pom.xml are the project itself and are skipped.
+lcc__discover_manifests() {
+    local root="$1" file rel c f
+    local -a pj=() composers=() flat=()
+    while IFS= read -r -d '' file; do
+        rel="${file#"$root"/}"
+        [[ "$rel" != *$'\n'* && "$rel" != *"$LCC_FS"* ]] || continue
+        case "${rel##*/}" in
+            package.json) [[ "$rel" != */* ]] || pj+=("$rel") ;;
+            composer.lock) composers+=("$rel") ;;
+            *) [[ "$rel" != */* ]] || flat+=("$rel") ;;
+        esac
+    done < <(lcc__find "$root" -type f \( -name package.json -o -name composer.lock -o -name Cargo.toml -o -name pyproject.toml -o -name pom.xml \))
+
+    cd -- "$root" || return 1
+    if ((${#pj[@]})); then lcc_read_package_json "${pj[@]}"; fi
+    for c in ${composers[@]+"${composers[@]}"}; do lcc_read_composer_lock "$c"; done
+    for f in ${flat[@]+"${flat[@]}"}; do lcc_read_flat_manifest "$f"; done
+}
+
+# lcc_record_key NAME PATH SOURCE : directory-like key under which sources of one package are merged.
+lcc_record_key() {
+    local name="$1" path="$2" source="$3" d
+    if [[ "$source" == "manifest" ]]; then
+        if [[ "${path##*/}" == "composer.lock" ]]; then
+            printf 'vendor/%s' "$name"
+        else
+            d="${path%/*}"
+            [[ "$path" == */* ]] || d="."
+            printf '%s' "$d"
+        fi
+    else
+        printf '%s' "$name"
+    fi
+}
+
+# Order- and case-insensitive form of a license expression, for comparing two declarations.
+lcc__norm_license() {
+    local s="${1,,}"
+    local -a t
+    s="${s//[()]/ }"
+    read -ra t <<<"$s"
+    printf '%s\n' "${t[@]}" | LC_ALL=C sort | tr '\n' ' '
+}
+
+# lcc_merge_records : read records on stdin, write them with manifest/file/submodule sources of the
+# same package merged. Header records pass through. Disagreeing licenses keep the declared one plus a note.
+lcc_merge_records() {
+    local -A k_name=() k_ver=() k_mpath=() k_fpath=() k_mlic=() k_flic=() k_msrc=() k_fsrc=() k_note=() k_fnote=() k_seen=()
+    local -a order=() pass=()
+    local name ver path lic src note key
+    while IFS=$LCC_FS read -r name ver path lic src note; do
+        [[ -n "$name$path" ]] || continue
+        if [[ "$src" == "header" ]]; then
+            pass+=("${name}${LCC_FS}${ver}${LCC_FS}${path}${LCC_FS}${lic}${LCC_FS}${src}${LCC_FS}${note}")
+            continue
+        fi
+        key="$(lcc_record_key "$name" "$path" "$src")"
+        if [[ -z "${k_seen[$key]:-}" ]]; then
+            k_seen[$key]=1
+            order+=("$key")
+        fi
+        if [[ "$src" == "manifest" ]]; then
+            k_name[$key]="$name" k_ver[$key]="$ver" k_mpath[$key]="$path" k_mlic[$key]="$lic" k_msrc[$key]=1
+            [[ -z "$note" ]] || k_note[$key]+="${k_note[$key]:+; }${note}"
+        else
+            k_fpath[$key]="$path" k_flic[$key]="$lic" k_fsrc[$key]="$src"
+            [[ -n "${k_name[$key]:-}" ]] || k_name[$key]="$name"
+            k_fnote[$key]="$note"
+        fi
+    done
+
+    local mlic flic fnote srcs out_lic out_note
+    for key in ${order[@]+"${order[@]}"}; do
+        mlic="${k_mlic[$key]:-}" flic="${k_flic[$key]:-}" fnote="${k_fnote[$key]:-}" out_note="${k_note[$key]:-}"
+        srcs=""
+        [[ -z "${k_msrc[$key]:-}" ]] || srcs="manifest"
+        [[ -z "${k_fsrc[$key]:-}" ]] || srcs+="${srcs:++}${k_fsrc[$key]}"
+
+        if [[ -n "$mlic" && -n "$flic" ]]; then
+            out_lic="$mlic"
+            if [[ "$(lcc__norm_license "$mlic")" != "$(lcc__norm_license "$flic")" ]]; then
+                out_note+="${out_note:+; }declared ${mlic}, text says ${flic}"
+            fi
+        elif [[ -n "$mlic" ]]; then
+            out_lic="$mlic"
+            [[ "$fnote" != "license text not recognized" ]] || fnote=""
+        else
+            out_lic="$flic"
+        fi
+        [[ -z "$fnote" ]] || out_note+="${out_note:+; }${fnote}"
+
+        printf '%s%s%s%s%s%s%s%s%s%s%s\n' \
+            "${k_name[$key]}" "$LCC_FS" "${k_ver[$key]:-}" "$LCC_FS" "${k_fpath[$key]:-${k_mpath[$key]:-}}" "$LCC_FS" \
+            "$out_lic" "$LCC_FS" "$srcs" "$LCC_FS" "$out_note"
+    done
+    if ((${#pass[@]})); then printf '%s\n' "${pass[@]}"; fi
+}
+
+# lcc_discover ROOT : print the merged, sorted records of everything found below ROOT.
+lcc_discover() {
+    local root
+    root="$(cd -- "$1" && pwd -P)" || return 1
+    {
+        lcc__discover_files "$root"
+        (lcc__discover_manifests "$root")
+    } | lcc_merge_records | LC_ALL=C sort
 }
 
 main() {
