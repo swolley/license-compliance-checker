@@ -171,3 +171,35 @@ evaluate_one() { # project license, then mkrec args
     run lcc_detect_project_license "$P"
     [ "$output" = "MIT" ]
 }
+
+@test "under a GPL-3.0 or AGPL-3.0 project a GPL-2.0-only dependency is forbidden" {
+    local proj
+    for proj in GPL-3.0-only GPL-3.0-or-later AGPL-3.0-or-later; do
+        run evaluate_one "$proj" dep 1.0 dep GPL-2.0-only file ""
+        [ "$(field "$output" 7)" = "forbidden" ] || { echo "$proj accepted GPL-2.0-only"; false; }
+    done
+}
+
+@test "under a GPL-3.0 project GPL-2.0-or-later, GPL-3.0, AGPL-3.0, LGPL, MPL and permissive licenses are ok" {
+    local lic
+    for lic in GPL-2.0-or-later GPL-3.0-only GPL-3.0-or-later AGPL-3.0-or-later LGPL-2.1-only LGPL-3.0-only MPL-2.0 MIT Apache-2.0 BSD-3-Clause ISC Zlib Unlicense; do
+        run evaluate_one GPL-3.0-or-later dep 1.0 dep "$lic" file ""
+        [ "$(field "$output" 7)" = "ok" ] || { echo "$lic not ok under GPL-3.0-or-later"; false; }
+    done
+}
+
+@test "a license the matrix does not know, such as OFL-1.1, needs review and is not forbidden" {
+    run evaluate_one GPL-3.0-or-later dep 1.0 dep OFL-1.1 file ""
+    [ "$(field "$output" 7)" = "review" ]
+}
+
+@test "several license files in a directory are only informational when every license is allowed" {
+    run evaluate_one GPL-3.0-or-later dep 1.0 dep "Apache-2.0 AND MPL-2.0" file "multiple license files"
+    [ "$(field "$output" 7)" = "ok" ]
+    [[ "$(field "$output" 8)" == *"multiple license files"* ]]
+}
+
+@test "several license files with one forbidden license are forbidden" {
+    run evaluate_one proprietary dep 1.0 dep "MIT AND GPL-3.0-only" file "multiple license files"
+    [ "$(field "$output" 7)" = "forbidden" ]
+}

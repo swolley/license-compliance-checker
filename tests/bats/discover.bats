@@ -160,3 +160,12 @@ rec() { cut -d "$LCC_FS" -f "$2" <<<"$1"; }
     [ "$(rec "$output" 1)" = "vendors/x" ]
     [ "$(rec "$output" 4)" = "ISC" ]
 }
+
+@test "a README note next to the license files is not a license file" {
+    put_license dep MPL-2.0 COPYING.MPL2
+    printf 'Primarily MPL2 licensed. See COPYING.MPL2.\n' >"$P/dep/COPYING.README"
+    run lcc_discover "$P"
+    [ "$(wc -l <<<"$output")" -eq 1 ]
+    [ "$(rec "$output" 4)" = "MPL-2.0" ]
+    [ "$(rec "$output" 6)" = "" ]
+}
