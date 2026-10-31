@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# check-licenses: check the licenses of a project's dependencies against the project license.
+# Requires bash 4+ and jq. See README.md.
+
+LCC_VERSION="2.0.0"
+
+lcc_die() {
+    printf 'check-licenses: %s\n' "$*" >&2
+    exit 2
+}
+
+lcc_require_env() {
+    if ((BASH_VERSINFO[0] < 4)); then
+        lcc_die "bash 4 or later is required (found ${BASH_VERSION})"
+    fi
+    command -v jq >/dev/null 2>&1 || lcc_die "jq is required but was not found in PATH"
+}
+
+lcc_usage() {
+    cat <<'USAGE'
+Usage: check-licenses [options]
+
+Options:
+  --path DIR              Project root to check (default: current directory)
+  --config FILE           Config file (default: DIR/.license-compliance)
+  --project-license ID    SPDX id of the project license (overrides detection)
+  --json                  Print the report as JSON
+  --strict                Exit 1 also when an entry needs manual review
+  --version               Print the version
+  --help                  Show this help
+
+Exit codes: 0 no forbidden entry, 1 forbidden entry (or review with --strict), 2 usage error.
+USAGE
+}
+
+lcc_parse_args() {
+    LCC_PATH="."
+    LCC_CONFIG=""
+    LCC_PROJECT_LICENSE_OPT=""
+    LCC_JSON=0
+    LCC_STRICT=0
+
+    while (($# > 0)); do
+        case "$1" in
+            --path) (($# >= 2)) || lcc_die "--path needs a value"; LCC_PATH="$2"; shift 2 ;;
+            --config) (($# >= 2)) || lcc_die "--config needs a value"; LCC_CONFIG="$2"; shift 2 ;;
+            --project-license) (($# >= 2)) || lcc_die "--project-license needs a value"; LCC_PROJECT_LICENSE_OPT="$2"; shift 2 ;;
+            --json) LCC_JSON=1; shift ;;
+            --strict) LCC_STRICT=1; shift ;;
+            --version) printf 'check-licenses %s\n' "$LCC_VERSION"; exit 0 ;;
+            --help|-h) lcc_usage; exit 0 ;;
+            *) lcc_die "unknown option: $1 (see --help)" ;;
+        esac
+    done
+}
+
+main() {
+    lcc_require_env
+    lcc_parse_args "$@"
+    [[ -d "$LCC_PATH" ]] || lcc_die "not a directory: $LCC_PATH"
+    return 0
+}
+
+if [[ -z "${LCC_SOURCE_ONLY:-}" ]]; then
+    set -euo pipefail
+    main "$@"
+fi
