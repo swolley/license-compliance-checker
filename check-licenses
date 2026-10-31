@@ -4,6 +4,10 @@
 
 LCC_VERSION="2.0.0"
 
+# Field separator of the records passed between stages (ASCII unit separator).
+# Not TAB: tab is IFS whitespace, so `read` would collapse empty fields.
+LCC_FS=$'\x1f'
+
 lcc_die() {
     printf 'check-licenses: %s\n' "$*" >&2
     exit 2
@@ -300,6 +304,177 @@ lcc_detect_spdx_header() {
     expr="$(printf '%s' "$expr" | sed -E 's/[[:space:]]*(\*\/|-->|#\}|\}\})[[:space:]]*$//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
     [[ -n "$expr" ]] || return 1
     printf '%s\n' "$expr"
+}
+
+# Make a value safe to be a record field.
+lcc__clean() {
+    local s="$1"
+    s="${s//$'\t'/ }"
+    s="${s//$'\n'/ }"
+    s="${s//$LCC_FS/ }"
+    printf '%s' "$s"
+}
+
+# Exclusions in effect: LCC_EXCLUDE minus LCC_INCLUDE, one per line.
+lcc__effective_excludes() {
+    local e inc=" ${LCC_INCLUDE[*]:-} "
+    for e in "${LCC_EXCLUDE[@]}"; do
+        [[ "$inc" == *" $e "* ]] || printf '%s\n' "$e"
+    done
+}
+
+# True when a base name looks like a license file (and not like source code).
+lcc__is_license_name() {
+    local n="${1,,}"
+    local re='^(licen[cs]e|copying|unlicense|notice)([-._ ][a-z0-9._+ -]*)?$'
+    case "$n" in
+        *.js | *.mjs | *.cjs | *.ts | *.json | *.py | *.pyc | *.php | *.rb | *.java | *.go | *.rs | *.c | *.h | *.cc | *.cpp | *.hpp | *.sh | *.yml | *.yaml | *.xml | *.toml | *.lock | *.map | *.css)
+            return 1
+            ;;
+    esac
+    [[ "$n" =~ $re ]]
+}
+
+# Print (NUL-separated) the candidate license files under ROOT. Symlinked directories are not followed.
+lcc__find_license_files() {
+    local root="$1" e sep=0
+    local -a prune=()
+    while IFS= read -r e; do
+        ((sep)) && prune+=(-o)
+        if [[ "$e" == */* ]]; then
+            prune+=(\( -path "$root/$e" -o -path "*/$e" \))
+        else
+            prune+=(-name "$e")
+        fi
+        sep=1
+    done < <(lcc__effective_excludes)
+
+    if ((${#prune[@]})); then
+        find -P "$root" -mindepth 1 -type d \( "${prune[@]}" \) -prune -o \
+            \( -type f -o -type l \) \( -iname 'licen[cs]e*' -o -iname 'copying*' -o -iname 'unlicense*' -o -iname 'notice*' -o -path '*/LICENSES/*' \) -print0
+    else
+        find -P "$root" -mindepth 1 \
+            \( -type f -o -type l \) \( -iname 'licen[cs]e*' -o -iname 'copying*' -o -iname 'unlicense*' -o -iname 'notice*' -o -path '*/LICENSES/*' \) -print0
+    fi
+}
+
+# lcc_discover ROOT : print one record per dependency-like directory:
+#   name FS version FS path FS license FS source FS note     (source: file, header, submodule)
+lcc_discover() {
+    local root file rel dir d base f id e sp key expr hit n rest
+    root="$(cd -- "$1" && pwd -P)" || return 1
+
+    local -A dirfiles=() subs=() hdr=()
+    local -a out=() main=() notices=() ids=() unknown=() slash_excludes=()
+
+    # 1. license files, grouped by directory
+    while IFS= read -r -d '' file; do
+        [[ -f "$file" ]] || continue
+        rel="${file#"$root"/}"
+        [[ "$rel" != *$'\n'* && "$rel" != *"$LCC_FS"* ]] || continue
+        d="${file%/*}"
+        base="${file##*/}"
+        if [[ "${d##*/}" != "LICENSES" ]]; then
+            lcc__is_license_name "$base" || continue
+        fi
+        dir="${rel%/*}"
+        [[ "$rel" == */* ]] || dir="."
+        if [[ "$dir" == "LICENSES" ]]; then
+            dir="."
+        elif [[ "$dir" == */LICENSES ]]; then
+            dir="${dir%/LICENSES}"
+        fi
+        dirfiles[$dir]+="${rel}${LCC_FS}"
+    done < <(lcc__find_license_files "$root")
+
+    # 2. submodules declared in .gitmodules
+    if [[ -r "$root/.gitmodules" ]]; then
+        while IFS= read -r sp; do
+            [[ -n "$sp" ]] || continue
+            subs[${sp%/}]=1
+        done < <(sed -n -E 's/^[[:space:]]*path[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' "$root/.gitmodules")
+    fi
+
+    # 3. one record per directory with license files
+    local source license note name path
+    for dir in "${!dirfiles[@]}"; do
+        [[ "$dir" != "." ]] || continue
+        mapfile -t main < <(IFS=$LCC_FS read -ra _f <<<"${dirfiles[$dir]}" && printf '%s\n' "${_f[@]}" | LC_ALL=C sort)
+        notices=()
+        local -a keep=()
+        for f in "${main[@]}"; do
+            d="${f%/*}"
+            if [[ "${f##*/}" == [Nn][Oo][Tt][Ii][Cc][Ee]* && "${d##*/}" != "LICENSES" ]]; then
+                notices+=("$f")
+            else
+                keep+=("$f")
+            fi
+        done
+        if ((${#keep[@]})); then main=("${keep[@]}"); else main=("${notices[@]}"); fi
+        unset keep
+
+        ids=()
+        unknown=()
+        for f in "${main[@]}"; do
+            id="$(lcc_license_from_filename "$root/$f" || lcc_detect_text "$root/$f")" || id=""
+            if [[ -n "$id" ]]; then ids+=("$id"); else unknown+=("${f##*/}"); fi
+        done
+
+        license="" note=""
+        if ((${#ids[@]})); then
+            mapfile -t ids < <(printf '%s\n' "${ids[@]}" | LC_ALL=C sort -u)
+            license="${ids[0]}"
+            for ((n = 1; n < ${#ids[@]}; n++)); do license+=" AND ${ids[n]}"; done
+            ((${#ids[@]} > 1)) && note="multiple license files"
+            if ((${#unknown[@]})); then
+                [[ -z "$note" ]] || note+="; "
+                note+="unrecognized: ${unknown[*]}"
+            fi
+        else
+            note="license text not recognized"
+        fi
+
+        source="file"
+        [[ -z "${subs[$dir]:-}" ]] || source="submodule"
+        out+=("$(lcc__clean "$dir")${LCC_FS}${LCC_FS}$(lcc__clean "${main[0]}")${LCC_FS}${license}${LCC_FS}${source}${LCC_FS}${note}")
+    done
+
+    # 4. submodules without license files (or not checked out)
+    for sp in "${!subs[@]}"; do
+        [[ -z "${dirfiles[$sp]:-}" ]] || continue
+        out+=("$(lcc__clean "$sp")${LCC_FS}${LCC_FS}$(lcc__clean "$sp")${LCC_FS}${LCC_FS}submodule${LCC_FS}no license file found (submodule may not be checked out)")
+    done
+
+    # 5. SPDX headers in the first 30 lines of any text file: one record per directory and expression
+    local -a grep_args=(-rIn -Z -m 1)
+    while IFS= read -r e; do
+        if [[ "$e" == */* ]]; then slash_excludes+=("$e"); else grep_args+=("--exclude-dir=$e"); fi
+    done < <(lcc__effective_excludes)
+
+    while IFS= read -r -d '' file && IFS= read -r rest; do
+        n="${rest%%:*}"
+        [[ "$n" =~ ^[0-9]+$ ]] && ((n <= 30)) || continue
+        rel="${file#"$root"/}"
+        [[ "$rel" != *$'\n'* && "$rel" != *"$LCC_FS"* && "$rel" == */* ]] || continue
+        hit=0
+        for e in "${slash_excludes[@]}"; do
+            [[ "/$rel" == *"/$e/"* ]] && hit=1
+        done
+        ((hit == 0)) || continue
+        expr="$(lcc_detect_spdx_header "$file")" || continue
+        dir="${rel%/*}"
+        key="${dir}${LCC_FS}${expr}"
+        if [[ -z "${hdr[$key]:-}" || "$rel" < "${hdr[$key]}" ]]; then hdr[$key]="$rel"; fi
+    done < <(grep "${grep_args[@]}" 'SPDX-License-Identifier:' "$root" 2>/dev/null)
+
+    for key in "${!hdr[@]}"; do
+        dir="${key%%"$LCC_FS"*}"
+        expr="${key#*"$LCC_FS"}"
+        out+=("$(lcc__clean "$dir")${LCC_FS}${LCC_FS}$(lcc__clean "${hdr[$key]}")${LCC_FS}$(lcc__clean "$expr")${LCC_FS}header${LCC_FS}")
+    done
+
+    ((${#out[@]})) || return 0
+    printf '%s\n' "${out[@]}" | LC_ALL=C sort
 }
 
 main() {
