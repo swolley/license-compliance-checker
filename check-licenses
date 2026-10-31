@@ -219,6 +219,89 @@ lcc_patterns_for() {
     lcc_expand_patterns "${raw[@]}"
 }
 
+# Print the head (16 KB) of a text file, lower-cased with whitespace squeezed.
+# Fails for empty and binary files.
+lcc__read_head() {
+    head -c 16384 -- "$1" 2>/dev/null | grep -qI . || return 1
+    head -c 16384 -- "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -s '[:space:]' ' '
+}
+
+# lcc_detect_text FILE : print the SPDX id recognised in a license text; exit 1 when unknown.
+lcc_detect_text() {
+    local t suffix id=""
+    t="$(lcc__read_head "$1")" || return 1
+
+    suffix="-only"
+    [[ "$t" == *"any later version"* ]] && suffix="-or-later"
+
+    if [[ "$t" == *"gnu affero general public license"* ]]; then
+        id="AGPL-3.0${suffix}"
+    elif [[ "$t" == *"gnu lesser general public license"* || "$t" == *"gnu library general public license"* ]]; then
+        if [[ "$t" == *"version 2.1"* ]]; then
+            id="LGPL-2.1${suffix}"
+        elif [[ "$t" == *"version 3"* ]]; then
+            id="LGPL-3.0${suffix}"
+        else
+            id="LGPL-2.0${suffix}"
+        fi
+    elif [[ "$t" == *"gnu general public license"* ]]; then
+        if [[ "$t" == *"version 3"* ]]; then
+            id="GPL-3.0${suffix}"
+        elif [[ "$t" == *"version 2"* ]]; then
+            id="GPL-2.0${suffix}"
+        fi
+    elif [[ "$t" == *"mozilla public license"* && "$t" == *"version 2.0"* ]]; then
+        id="MPL-2.0"
+    elif [[ "$t" == *"apache license"* && "$t" == *"version 2.0"* ]]; then
+        id="Apache-2.0"
+    elif [[ "$t" == *"cc0 1.0 universal"* ]]; then
+        id="CC0-1.0"
+    elif [[ "$t" == *"free and unencumbered software released into the public domain"* ]]; then
+        id="Unlicense"
+    elif [[ "$t" == *"permission is hereby granted, free of charge"* ]]; then
+        id="MIT"
+    elif [[ "$t" == *"permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted"* ]]; then
+        if [[ "$t" == *"provided that the above copyright notice"* ]]; then
+            id="ISC"
+        else
+            id="0BSD"
+        fi
+    elif [[ "$t" == *"redistribution and use in source and binary forms"* ]]; then
+        if [[ "$t" == *"neither the name of"* ]]; then
+            id="BSD-3-Clause"
+        elif [[ "$t" == *"all advertising materials mentioning"* ]]; then
+            id="BSD-4-Clause"
+        else
+            id="BSD-2-Clause"
+        fi
+    fi
+
+    [[ -n "$id" ]] || return 1
+    printf '%s\n' "$id"
+}
+
+# lcc_license_from_filename PATH : LICENSES/<id>.txt (REUSE layout) gives <id>.
+lcc_license_from_filename() {
+    local base dir
+    base="$(basename -- "$1")"
+    dir="$(basename -- "$(dirname -- "$1")")"
+    [[ "$dir" == "LICENSES" ]] || return 1
+    base="${base%.txt}"
+    base="${base%.md}"
+    [[ -n "$base" ]] || return 1
+    printf '%s\n' "$base"
+}
+
+# lcc_detect_spdx_header FILE : print the SPDX-License-Identifier expression found in the first 30 lines.
+lcc_detect_spdx_header() {
+    local line expr
+    line="$(head -n 30 -- "$1" 2>/dev/null | head -c 8192 | grep -I -m 1 'SPDX-License-Identifier:')" || return 1
+    expr="${line#*SPDX-License-Identifier:}"
+    expr="$(printf '%s' "$expr" | sed -E 's/[[:space:]]*(\*\/|-->|#\}|\}\})[[:space:]]*$//; s/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [[ -n "$expr" ]] || return 1
+    printf '%s\n' "$expr"
+}
+
 main() {
     lcc_require_env
     lcc_parse_args "$@"
