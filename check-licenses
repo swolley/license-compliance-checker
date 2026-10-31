@@ -816,11 +816,91 @@ lcc_evaluate() {
     done
 }
 
+# lcc_report_table : print evaluated records (stdin) as a table, the reasons of the entries that are not ok,
+# and a summary. Colors only on a terminal (and when NO_COLOR is unset).
+lcc_report_table() {
+    local name ver path lic src note status reason sym
+    local total=0 n_ok=0 n_forbidden=0 n_review=0
+    local green="" red="" yellow="" reset=""
+    local -a details=()
+    if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+        green=$'\e[32m' red=$'\e[31m' yellow=$'\e[33m' reset=$'\e[0m'
+    fi
+
+    printf '%-44s  %-12s  %-44s  %-5s  %s\n' Name Version License Check Source
+    while IFS=$LCC_FS read -r name ver path lic src note status reason; do
+        [[ -n "$name$path" ]] || continue
+        total=$((total + 1))
+        case "$status" in
+            ok) sym="${green}✓${reset}" n_ok=$((n_ok + 1)) ;;
+            forbidden)
+                sym="${red}✗${reset}" n_forbidden=$((n_forbidden + 1))
+                details+=("  forbidden  ${name}: ${reason}")
+                ;;
+            *)
+                sym="${yellow}?${reset}" n_review=$((n_review + 1))
+                details+=("  review     ${name}: ${reason}")
+                ;;
+        esac
+        printf '%-44.44s  %-12.12s  %-44.44s  %s    %s\n' "$name" "$ver" "$lic" "$sym" "$src"
+    done
+
+    if ((${#details[@]})); then
+        printf '\n'
+        printf '%s\n' "${details[@]}"
+    fi
+    printf '\n%d dependencies: %d ok, %d forbidden, %d review\n' "$total" "$n_ok" "$n_forbidden" "$n_review"
+}
+
+# lcc_report_json : print evaluated records (stdin) as a JSON array.
+lcc_report_json() {
+    jq -R -s --arg fs "$LCC_FS" '
+        split("\n") | map(select(length > 0) | split($fs)
+            | {name: .[0], version: .[1], path: .[2], license: .[3], source: .[4], note: .[5], status: .[6], reason: .[7]})'
+}
+
+# lcc_exit_code : read evaluated records (stdin); return 1 on a forbidden entry (or a review one with --strict).
+lcc_exit_code() {
+    local name ver path lic src note status reason rc=0
+    while IFS=$LCC_FS read -r name ver path lic src note status reason; do
+        if [[ "$status" == "forbidden" ]]; then
+            rc=1
+        elif [[ "$status" == "review" && "${LCC_STRICT:-0}" -eq 1 ]]; then
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
 main() {
+    local records evaluated
     lcc_require_env
     lcc_parse_args "$@"
     [[ -d "$LCC_PATH" ]] || lcc_die "not a directory: $LCC_PATH"
-    return 0
+    LCC_PATH="$(cd -- "$LCC_PATH" && pwd -P)"
+
+    lcc_load_defaults
+    if [[ -n "$LCC_CONFIG" ]]; then
+        lcc_load_config "$LCC_CONFIG"
+    elif [[ -r "$LCC_PATH/.license-compliance" ]]; then
+        lcc_load_config "$LCC_PATH/.license-compliance"
+    fi
+    LCC_PROJECT_LICENSE="$(lcc_resolve_project_license "$LCC_PATH")" || exit 2
+
+    records="$(lcc_discover "$LCC_PATH")"
+    if [[ -z "$records" ]]; then
+        if ((LCC_JSON)); then printf '[]\n'; else printf 'no dependencies found\n'; fi
+        return 0
+    fi
+
+    evaluated="$(lcc_evaluate <<<"$records")" || exit 2
+    if ((LCC_JSON)); then
+        lcc_report_json <<<"$evaluated"
+    else
+        printf 'Project license: %s\n\n' "$LCC_PROJECT_LICENSE"
+        lcc_report_table <<<"$evaluated"
+    fi
+    lcc_exit_code <<<"$evaluated"
 }
 
 if [[ -z "${LCC_SOURCE_ONLY:-}" ]]; then
