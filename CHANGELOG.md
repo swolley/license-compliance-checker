@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `composer.json` again, to install the script with Composer as `vendor/bin/check-licenses`. It requires no PHP: the script is still bash, with jq.
 - The zlib license is recognized (`Zlib`) and allowed like the other permissive licenses.
 
 ## [2.0.0] - 2026-10-31
