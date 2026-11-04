@@ -1,0 +1,26 @@
+Licenses
+========
+
+Good news! You may use Nette Framework under the terms of either
+the New BSD License or the GNU General Public License (GPL) version 2 or 3.
+
+
+New BSD License
+---------------
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+	* Neither the name of "Nette Framework" nor the names of its contributors
+	may be used to endorse or promote products derived from this software
+	without specific prior written permission.
+
+
+GNU General Public License
+--------------------------
+
+GPL licenses are very very long, so instead of including them here we offer
+you URLs with full text:
+
+- [GPL version 2](http://www.gnu.org/licenses/gpl-2.0.html)
+- [GPL version 3](http://www.gnu.org/licenses/gpl-3.0.html)

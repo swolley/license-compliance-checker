@@ -25,6 +25,9 @@ assert_detects() { # expected id, fixture file
 @test "detects GPL-2.0-only" { assert_detects GPL-2.0-only GPL-2.0-only.txt; }
 @test "detects GPL-3.0-only" { assert_detects GPL-3.0-only GPL-3.0-only.txt; }
 @test "GPL text with 'any later version' yields -or-later" { assert_detects GPL-3.0-or-later GPL-3.0-or-later.txt; }
+@test "a choice between the New BSD License and GPL version 2 or 3 yields the three-way OR" {
+    assert_detects "BSD-3-Clause OR GPL-2.0-only OR GPL-3.0-only" BSD-3-Clause-OR-GPL-2.0-only-OR-GPL-3.0-only.txt
+}
 
 @test "unrecognized text is unknown and prints nothing" {
     printf 'All rights reserved. Do not copy.\n' >"$BATS_TEST_TMPDIR/LICENSE"
