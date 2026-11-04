@@ -20,6 +20,13 @@ chmod +x check-licenses
 
 Or copy the file into your project (for example `scripts/check-licenses`). No Composer, npm or PHP needed.
 
+With Composer, as a development dependency (Composer only installs the script, which still needs bash and jq):
+
+```bash
+composer require --dev swolley/license-compliance-checker
+vendor/bin/check-licenses
+```
+
 ## Usage
 
 ```bash

@@ -1,0 +1,27 @@
+{
+  "name": "swolley/license-compliance-checker",
+  "type": "library",
+  "description": "Check the licenses of a project's dependencies against the project license. A bash script (bash 4.4+ and jq): Composer only installs it.",
+  "license": "MIT",
+  "keywords": [
+    "license",
+    "compliance",
+    "spdx",
+    "dependencies"
+  ],
+  "homepage": "https://github.com/swolley/license-compliance-checker#readme",
+  "support": {
+    "issues": "https://github.com/swolley/license-compliance-checker/issues",
+    "source": "https://github.com/swolley/license-compliance-checker"
+  },
+  "bin": [
+    "check-licenses"
+  ],
+  "archive": {
+    "exclude": [
+      "/.github",
+      "/docs",
+      "/tests"
+    ]
+  }
+}
